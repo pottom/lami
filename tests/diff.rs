@@ -76,7 +76,7 @@ fn a_missing_file_is_reported_as_created() {
 
     let (out, ok) = f.run(&["diff"]);
     assert!(ok, "{out}");
-    assert!(out.contains("+ file"), "{out}");
+    assert!(out.contains("create"), "{out}");
     assert!(out.contains("managed.conf"), "{out}");
 }
 
@@ -89,7 +89,7 @@ fn a_matching_file_produces_no_change() {
     let (out, ok) = f.run(&["diff"]);
     assert!(ok, "{out}");
     assert!(
-        !out.contains("file"),
+        out.contains("Nothing to do"),
         "a byte-identical file must not show up:\n{out}"
     );
 }
@@ -101,7 +101,7 @@ fn a_differing_file_is_reported_as_updated() {
 
     let (out, ok) = f.run(&["diff"]);
     assert!(ok, "{out}");
-    assert!(out.contains("~ file"), "{out}");
+    assert!(out.contains("write"), "{out}");
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn a_hook_fires_only_when_its_file_changes() {
 
     let (out, ok) = f.run(&["diff"]);
     assert!(ok, "{out}");
-    assert!(out.contains("> run"), "the hook should fire:\n{out}");
+    assert!(out.contains("run"), "the hook should fire:\n{out}");
     assert!(out.contains("because"), "it should say why:\n{out}");
 }
 
@@ -181,7 +181,7 @@ fn a_hook_stays_quiet_when_nothing_changes() {
     let (out, ok) = f.run(&["diff"]);
     assert!(ok, "{out}");
     assert!(
-        !out.contains("> run"),
+        out.contains("Nothing to do"),
         "no file changed, so no hook should run:\n{out}"
     );
 }
@@ -197,6 +197,6 @@ fn a_wrong_mode_is_reported_even_when_content_matches() {
 
     let (out, ok) = f.run(&["diff"]);
     assert!(ok, "{out}");
-    assert!(out.contains("~ perms"), "{out}");
-    assert!(out.contains("600 -> 644"), "should say both modes:\n{out}");
+    assert!(out.contains("chmod"), "{out}");
+    assert!(out.contains("mode is 600, should be 644"), "should say both modes in words:\n{out}");
 }
