@@ -144,7 +144,7 @@ pub fn run_apply(
         })
         .collect();
     if !missing.is_empty() {
-        println!("packages:");
+        println!("{}", crate::color::bold("packages:"));
         install(&missing, actor)?;
     }
 
@@ -160,7 +160,7 @@ pub fn run_apply(
         })
         .collect();
     if !files.is_empty() {
-        println!("files:");
+        println!("{}", crate::color::bold("files:"));
         for (layer, f) in r.files() {
             let touched = files.iter().any(|c| match c {
                 Change::CreateFile { path, .. }
@@ -194,7 +194,7 @@ pub fn run_apply(
         })
         .collect();
     if !units.is_empty() {
-        println!("services:");
+        println!("{}", crate::color::bold("services:"));
         // Enable only; never start. A unit that needs to be running now is a
         // decision for the operator, not a side effect of writing config.
         run(Command::new("systemctl")
@@ -216,7 +216,7 @@ pub fn run_apply(
         })
         .collect();
     if !hooks.is_empty() {
-        println!("hooks:");
+        println!("{}", crate::color::bold("hooks:"));
         for (cmd, because) in hooks {
             println!("  {cmd}   (because {because} changed)");
             let mut parts = cmd.split_whitespace();
@@ -301,7 +301,7 @@ pub fn stale(r: &Resolved<'_>, actor: &Actor) -> Stale {
 
 pub fn run_prune(s: &Stale) -> Result<()> {
     if !s.services.is_empty() {
-        println!("services:");
+        println!("{}", crate::color::bold("services:"));
         // Disabled, not stopped. Stopping a display manager out from under a
         // running session because a layer was edited would be indefensible.
         run(Command::new("systemctl")
@@ -312,7 +312,7 @@ pub fn run_prune(s: &Stale) -> Result<()> {
         }
     }
     if !s.files.is_empty() {
-        println!("files:");
+        println!("{}", crate::color::bold("files:"));
         for f in &s.files {
             match std::fs::remove_file(f) {
                 Ok(()) => println!("  {f} removed"),
@@ -324,7 +324,7 @@ pub fn run_prune(s: &Stale) -> Result<()> {
         }
     }
     if !s.packages.is_empty() {
-        println!("packages:");
+        println!("{}", crate::color::bold("packages:"));
         // -Rs removes dependencies that nothing else needs; -n drops config
         // files pacman saved. Deliberately NOT --nosave on the pacman side of
         // /etc: pacsave files are the last line of defence against a mistake.

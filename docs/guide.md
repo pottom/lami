@@ -302,6 +302,22 @@ quietly receive somebody else's configuration.
 
 ---
 
+## Colour
+
+Output is coloured when it goes to a terminal, and plain otherwise — so piping
+into `grep`, `less -F` or a file gives clean text without asking.
+
+Colour carries meaning rather than decoration: green adds, yellow changes, red
+removes, cyan runs a command. The sigils (`+ ~ - >`) say the same thing, so
+nothing is lost without it.
+
+To turn it off explicitly:
+
+```sh
+lami diff --no-color
+NO_COLOR=1 lami diff        # the de-facto standard, honoured everywhere
+```
+
 ## Everyday loop
 
 ```sh

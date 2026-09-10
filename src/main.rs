@@ -3,6 +3,7 @@
 mod apply;
 mod capture;
 mod cli;
+mod color;
 mod config;
 mod diff;
 mod error;
@@ -90,6 +91,7 @@ fn hostname() -> String {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    color::init(cli.no_color);
     let dir = config_dir(cli.config_dir.clone())?;
 
     if !dir.is_dir() {
@@ -148,7 +150,7 @@ fn main() -> Result<()> {
 fn cmd_list(cfg: &Config) {
     println!("config: {}\n", cfg.dir.display());
 
-    println!("hosts:");
+    println!("{}", color::bold("hosts:"));
     if cfg.hosts.is_empty() {
         println!("  (none)");
     }
@@ -157,7 +159,7 @@ fn cmd_list(cfg: &Config) {
         println!("  {:<12} {}", h.name, desc);
     }
 
-    println!("\nlayers:");
+    println!("\n{}", color::bold("layers:"));
     if cfg.layers.is_empty() {
         println!("  (none)");
     }
@@ -170,18 +172,18 @@ fn cmd_list(cfg: &Config) {
 fn cmd_show(cfg: &Config, host: String) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
 
-    println!("host: {}", r.host.name);
+    println!("{}", color::bold(&format!("host: {}", r.host.name)));
     if let Some(d) = &r.host.description {
         println!("     {d}");
     }
     println!("     {}", r.host.origin.display());
 
-    println!("\nparameters:");
+    println!("\n{}", color::bold("parameters:"));
     for (k, v) in &r.host.params {
         println!("  {k:<14} {v}");
     }
 
-    println!("\nlayers (resolved, in dependency order):");
+    println!("\n{}", color::bold("layers (resolved, in dependency order):"));
     for l in &r.layers {
         let explicit = if r.host.layers.contains(&l.name) {
             ""
@@ -191,7 +193,7 @@ fn cmd_show(cfg: &Config, host: String) -> Result<(), Error> {
         println!("  {:<12} {}{}", l.name, l.path.display(), explicit);
     }
 
-    println!("\nresources for this host:");
+    println!("\n{}", color::bold("resources for this host:"));
     println!("  packages   {}", r.packages().len());
     println!("  services   {}", r.services().len());
     Ok(())
@@ -210,7 +212,7 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
                 continue;
             }
             found = true;
-            println!("{}  ({kind})", decl.name);
+            println!("{}  {}", color::bold(&decl.name), color::dim(&format!("({kind})")));
             println!("  declared:   {}", decl.origin);
             print!("  applies:    layer '{}'", layer.name);
             if r.host.layers.contains(&layer.name) {
@@ -238,7 +240,7 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
             f.group.as_deref(),
             f.mode,
         );
-        println!("{}  (file)", f.path);
+        println!("{}  {}", color::bold(&f.path), color::dim("(file)"));
         println!("  declared:   {}", f.origin);
         println!("  applies:    layer '{}'", layer.name);
         match &f.source {
@@ -260,7 +262,7 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
             continue;
         }
         found = true;
-        println!("{}  (watched by a hook)", target);
+        println!("{}  {}", color::bold(target), color::dim("(watched by a hook)"));
         println!("  declared:   {}", h.origin);
         println!("  applies:    layer '{}'", layer.name);
         println!("  runs:       {}", h.run);
@@ -282,7 +284,7 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
 /// install time.
 fn cmd_check(cfg: &Config, host: String) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
-    println!("host: {}\n", r.host.name);
+    println!("{}\n", color::bold(&format!("host: {}", r.host.name)));
 
     if !pacman::available() {
         println!("pacman is not available, skipping the package check.");
@@ -296,7 +298,7 @@ fn cmd_check(cfg: &Config, host: String) -> Result<(), Error> {
     let (from_repo, unknown): (Vec<&str>, Vec<&str>) =
         declared.iter().partition(|p| sync.contains(**p));
 
-    println!("packages:");
+    println!("{}", color::bold("packages:"));
     println!("  from repos   {}", from_repo.len());
     println!("  not in repos {}", unknown.len());
 
@@ -412,8 +414,11 @@ fn cmd_render(
             }
             None if raw => print!("{content}"),
             None => {
-                println!("\x1b[1m=== {} \x1b[0m", f.path);
-                println!("    layer {}, declared at {}", layer.name, f.origin);
+                println!("{}", color::heading(&format!("=== {}", f.path)));
+                println!(
+                    "{}",
+                    color::dim(&format!("    layer {}, declared at {}", layer.name, f.origin))
+                );
                 println!();
                 for line in content.lines() {
                     println!("    {line}");
@@ -431,7 +436,7 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
     let home = real_home()?;
     let report = diff::compute(&r, &home, &real_user()?, &cfg.settings)?;
 
-    println!("host: {}\n", r.host.name);
+    println!("{}\n", color::bold(&format!("host: {}", r.host.name)));
 
     if report.changes.is_empty() {
         println!("Nothing to do -- the machine matches the config.");
@@ -494,7 +499,7 @@ fn cmd_apply(cfg: &Config, host: String, dry: bool) -> Result<(), Error> {
         home,
     };
 
-    println!("host: {}\n", r.host.name);
+    println!("{}\n", color::bold(&format!("host: {}", r.host.name)));
     let n = apply::run_apply(&r, &actor, dry, &cfg.settings)?;
     if n > 0 && !dry {
         println!("\nApplied {n} change(s).");
@@ -528,8 +533,13 @@ fn cmd_capture(
             })?;
         let live = render::target_path(decl, &home);
         let edit = capture::capture_file(decl, &live, dry)?;
-        println!("{}  <-  {}", edit.file.display(), live.display());
-        println!("{}", edit.summary());
+        println!(
+            "{}  {}  {}",
+            edit.file.display(),
+            color::dim("<-"),
+            live.display()
+        );
+        println!("{}", colourise_summary(&edit.summary()));
         if dry {
             println!("\n--dry-run: nothing was written.");
         } else {
@@ -541,7 +551,7 @@ fn cmd_capture(
     let Some(package) = package else {
         // No target named: show what is on offer.
         let report = diff::compute(&r, &real_home()?, &real_user()?, &cfg.settings)?;
-        println!("host: {}\n", r.host.name);
+        println!("{}\n", color::bold(&format!("host: {}", r.host.name)));
 
         let changed: Vec<&diff::Change> = report
             .changes
@@ -599,7 +609,7 @@ fn cmd_capture(
     let edit = capture::add_package(&target.path, package, dry)?;
 
     println!("{}", edit.file.display());
-    println!("{}", edit.summary());
+    println!("{}", colourise_summary(&edit.summary()));
     if dry {
         println!("\n--dry-run: nothing was written.");
     } else {
@@ -627,7 +637,7 @@ fn cmd_prune(
     };
 
     let stale = apply::stale(&r, &actor);
-    println!("host: {}\n", r.host.name);
+    println!("{}\n", color::bold(&format!("host: {}", r.host.name)));
 
     if stale.is_empty() {
         println!("Nothing to prune -- everything lami manages is still declared.");
@@ -635,13 +645,13 @@ fn cmd_prune(
     }
 
     for p in &stale.packages {
-        println!("  - package  {p}");
+        println!("  {} {p}", color::removed("- package"));
     }
     for s in &stale.services {
-        println!("  - service  {s}");
+        println!("  {} {s}", color::removed("- service"));
     }
     for f in &stale.files {
-        println!("  - file     {f}");
+        println!("  {} {f}", color::removed("- file   "));
     }
     println!("\n{} item(s) lami used to manage and no longer declares.", stale.len());
 
@@ -672,4 +682,16 @@ fn cmd_prune(
     apply::run_prune(&stale)?;
     println!("\nPruned {} item(s).", stale.len());
     Ok(())
+}
+
+/// Colour a capture summary the way a diff reads: additions green, removals red.
+fn colourise_summary(text: &str) -> String {
+    text.lines()
+        .map(|l| match l.chars().next() {
+            Some('+') => color::added(l),
+            Some('-') => color::removed(l),
+            _ => l.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

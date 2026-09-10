@@ -23,6 +23,13 @@ pub struct Cli {
     #[arg(long, global = true, env = "LAMI_HOST")]
     pub host: Option<String>,
 
+    /// Never colour the output.
+    ///
+    /// Colour is on by default, and already turns itself off when the output
+    /// is not a terminal or when NO_COLOR is set.
+    #[arg(long, global = true)]
+    pub no_color: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }

@@ -127,3 +127,37 @@ fn trailing_blank_lines_are_preserved() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn piped_output_carries_no_escape_codes() {
+    // Colour is meaning here, not decoration -- but a pipe or a file must get
+    // clean text. Capturing output like this is exactly the non-terminal case,
+    // so nothing may be coloured.
+    let exe = env!("CARGO_BIN_EXE_lami");
+    let out = std::process::Command::new(exe)
+        .args(["--config-dir", "examples/minimal", "--host", "frodo", "show"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !text.contains('\x1b'),
+        "escape codes leaked into non-terminal output:\n{text:?}"
+    );
+}
+
+#[test]
+fn no_color_is_accepted_everywhere() {
+    // --no-color is a global flag, so it has to work after the subcommand too.
+    let exe = env!("CARGO_BIN_EXE_lami");
+    for args in [
+        vec!["--no-color", "list"],
+        vec!["list", "--no-color"],
+    ] {
+        let out = std::process::Command::new(exe)
+            .args(["--config-dir", "examples/minimal"])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?} failed");
+    }
+}

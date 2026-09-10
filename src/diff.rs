@@ -36,26 +36,57 @@ pub enum Change {
 
 impl Change {
     pub fn line(&self) -> String {
+        use crate::color::{action, added, changed, dim};
         match self {
-            Change::InstallPackage { name, layer } => format!("+ package  {name}  [{layer}]"),
+            Change::InstallPackage { name, layer } => format!(
+                "{} {}  {}",
+                added("+ package"),
+                name,
+                dim(&format!("[{layer}]"))
+            ),
             Change::EnableService {
                 unit,
                 layer,
                 current,
-            } => format!("+ service  {unit}  [{layer}]  (now: {current})"),
-            Change::CreateFile { path, layer } => format!("+ file     {path}  [{layer}]"),
-            Change::UpdateFile { path, layer } => format!("~ file     {path}  [{layer}]"),
+            } => format!(
+                "{} {}  {}",
+                added("+ service"),
+                unit,
+                dim(&format!("[{layer}]  (now: {current})"))
+            ),
+            Change::CreateFile { path, layer } => format!(
+                "{} {}  {}",
+                added("+ file   "),
+                path,
+                dim(&format!("[{layer}]"))
+            ),
+            Change::UpdateFile { path, layer } => format!(
+                "{} {}  {}",
+                changed("~ file   "),
+                path,
+                dim(&format!("[{layer}]"))
+            ),
             Change::FixPermissions {
                 path,
                 layer,
                 want,
                 have,
-            } => format!("~ perms    {path}  [{layer}]  {have} -> {want}"),
+            } => format!(
+                "{} {}  {}",
+                changed("~ perms  "),
+                path,
+                dim(&format!("[{layer}]  {have} -> {want}"))
+            ),
             Change::RunHook {
                 run,
                 layer,
                 because,
-            } => format!("> run      {run}  [{layer}]  (because {because} changes)"),
+            } => format!(
+                "{} {}  {}",
+                action("> run    "),
+                run,
+                dim(&format!("[{layer}]  (because {because} changes)"))
+            ),
         }
     }
 }
