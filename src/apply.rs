@@ -173,7 +173,7 @@ pub fn run_apply(
             if !touched {
                 continue;
             }
-            let content = render::file(r, layer, f, settings)?;
+            let content = render::file(r, layer, f, settings, &actor.home, &actor.name)?;
             let pm = perms::with_overrides(
                 perms::secret_aware(f, &actor.name),
                 f.owner.as_deref(),

@@ -249,7 +249,7 @@ pub fn compute(
     let mut touched: Vec<String> = Vec::new();
 
     for (layer, f) in r.files() {
-        let want = render::file(r, layer, f, settings)?;
+        let want = render::file(r, layer, f, settings, home, user)?;
         let target = render::target_path(f, home);
         match std::fs::read_to_string(&target) {
             Ok(have) if have == want => {

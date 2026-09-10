@@ -241,8 +241,31 @@ fn args(node: &KdlNode) -> Vec<String> {
         .collect()
 }
 
-/// A node's single argument as a value.
+/// A node's value.
+///
+/// A child block is always a list, even with one entry:
+///
+/// ```kdl
+/// monitors {
+///     "DP-1, 2560x1440@144, 0x0, 1"
+/// }
+/// ```
+///
+/// This matters because KDL cannot otherwise tell one string from a list of
+/// one, and a template looping over the scalar form silently produces nothing.
+/// Writing a list as a block is also how `packages` and `services` already
+/// read, so there is one rule rather than two.
 fn value_of(node: &KdlNode) -> Option<Value> {
+    if let Some(children) = node.children() {
+        return Some(Value::List(
+            children
+                .nodes()
+                .iter()
+                .map(|n| n.name().value().to_string())
+                .collect(),
+        ));
+    }
+
     let a: Vec<&KdlValue> = node
         .entries()
         .iter()
@@ -445,6 +468,11 @@ fn collect(
             "file" => {
                 let decl = parse_file(node, src, path, cond.as_ref(), &layer.dir)?;
                 layer.files.push(decl);
+            }
+            "dir" => {
+                for decl in parse_dir(node, src, path, cond.as_ref(), &layer.dir)? {
+                    layer.files.push(decl);
+                }
             }
             "on-change" => {
                 let watch = args(node);
@@ -900,4 +928,106 @@ fn units_from(
         }
     }
     Ok(out)
+}
+
+/// `dir "~/.config/fish" from="files/fish"`
+///
+/// Expands to one file declaration per file found in the source tree, which
+/// keeps everything downstream -- diff, apply, capture, why -- working on
+/// individual files with no special cases. A directory is a way of writing
+/// many files, not a different kind of thing.
+///
+/// The `.tmpl` and `.age` suffixes are stripped from the target name, so
+/// `files/fish/config.fish.tmpl` becomes `~/.config/fish/config.fish`.
+fn parse_dir(
+    node: &KdlNode,
+    src: &str,
+    path: &Path,
+    cond: Option<&Condition>,
+    layer_dir: &Path,
+) -> Result<Vec<FileDecl>> {
+    let span = (node.span().offset(), node.span().len());
+
+    let target = args(node).into_iter().next().ok_or_else(|| Error::Config {
+        msg: "`dir` needs a target path".into(),
+        src: named(path, src),
+        span: span.into(),
+        label: "e.g. `dir \"~/.config/fish\" from=\"files/fish\"`".into(),
+    })?;
+
+    let from = node
+        .entries()
+        .iter()
+        .find(|e| e.name().is_some_and(|n| n.value() == "from"))
+        .and_then(|e| match e.value() {
+            KdlValue::String(s) => Some(s.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| Error::Config {
+            msg: format!("`{target}` has no source directory"),
+            src: named(path, src),
+            span: span.into(),
+            label: "add `from=\"files/...\"`".into(),
+        })?;
+
+    let root = layer_dir.join(&from);
+    if !root.is_dir() {
+        return Err(Error::Config {
+            msg: format!("{} is not a directory", root.display()),
+            src: named(path, src),
+            span: span.into(),
+            label: "`dir` copies a tree; use `file` for a single file".into(),
+        });
+    }
+
+    let line = line_of(src, node.span().offset());
+    let mut out = Vec::new();
+    walk(&root, &root, &target, path, line, cond, &mut out)?;
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
+fn walk(
+    root: &Path,
+    dir: &Path,
+    target_root: &str,
+    origin_file: &Path,
+    line: usize,
+    cond: Option<&Condition>,
+    out: &mut Vec<FileDecl>,
+) -> Result<()> {
+    let entries = fs::read_dir(dir).map_err(|source| Error::Io {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            walk(root, &p, target_root, origin_file, line, cond, out)?;
+            continue;
+        }
+        let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy();
+        // The suffix says how to process the source; it is not part of the
+        // name the file should have on disk.
+        let rel = rel
+            .strip_suffix(".tmpl")
+            .or_else(|| rel.strip_suffix(".age"))
+            .unwrap_or(&rel)
+            .to_string();
+
+        out.push(FileDecl {
+            path: format!("{}/{}", target_root.trim_end_matches('/'), rel),
+            source: Source::From(p),
+            owner: None,
+            group: None,
+            mode: None,
+            origin: Origin {
+                file: origin_file.to_path_buf(),
+                line,
+            },
+            condition: cond.cloned(),
+        });
+    }
+    Ok(())
 }

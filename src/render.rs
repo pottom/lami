@@ -24,7 +24,7 @@ use crate::config::{FileDecl, Layer, Resolved, Source, Value};
 use crate::error::{Error, Result};
 
 /// The template variables available to a file's content.
-fn context(r: &Resolved<'_>, layer: &Layer) -> JValue {
+fn context(r: &Resolved<'_>, layer: &Layer, home: &std::path::Path, user: &str) -> JValue {
     let mut map = std::collections::BTreeMap::new();
     for (k, v) in &r.host.params {
         let jv = match v {
@@ -37,16 +37,41 @@ fn context(r: &Resolved<'_>, layer: &Layer) -> JValue {
     }
     map.insert("hostname".into(), JValue::from(r.host.name.clone()));
     map.insert("layer".into(), JValue::from(layer.name.clone()));
+    // Needed by anything that has to write an absolute path into a file --
+    // .desktop Exec lines and config formats that do not expand `~`.
+    map.insert("home".into(), JValue::from(home.display().to_string()));
+    map.insert("user".into(), JValue::from(user.to_string()));
     JValue::from(map)
 }
 
 /// Render one file's content for this host.
+/// Whether a source file is a template.
+///
+/// Only a `*.tmpl` name is. Rendering everything was convenient and wrong in
+/// two ways: a static file that happens to contain `{{` would break or be
+/// mangled, and -- worse -- `capture` writes the live content back into the
+/// source, so capturing a rendered template would replace `{{ cpu_threads }}`
+/// with `8` and destroy the template.
+///
+/// Inline `text` is always a template: it is written in the layer, so there is
+/// nothing to capture back into.
+pub fn is_template(p: &std::path::Path) -> bool {
+    p.to_string_lossy().ends_with(".tmpl")
+}
+
 pub fn file(
     r: &Resolved<'_>,
     layer: &Layer,
     decl: &FileDecl,
     settings: &crate::config::Settings,
+    home: &std::path::Path,
+    user: &str,
 ) -> Result<String> {
+    let templated = match &decl.source {
+        Source::Text(_) => true,
+        Source::From(p) => is_template(p),
+    };
+
     let raw = match &decl.source {
         Source::Text(t) => t.clone(),
         // A source named *.age is decrypted on the way out. No attribute to
@@ -61,6 +86,11 @@ pub fn file(
         })?,
     };
 
+    // A plain source is copied through untouched. Only *.tmpl is rendered.
+    if !templated {
+        return Ok(with_trailing_newline(raw));
+    }
+
     let mut env = Environment::empty();
 
     // Jinja strips one trailing newline by default -- a convention that makes
@@ -70,7 +100,7 @@ pub fn file(
 
     let name = decl.path.clone();
     let rendered = env
-        .render_named_str(&name, &raw, context(r, layer))
+        .render_named_str(&name, &raw, context(r, layer, home, user))
         .map_err(|e| {
             // minijinja reports the line within the template; point at the
             // declaration too, so the user knows which file to open.

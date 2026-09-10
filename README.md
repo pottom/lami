@@ -3,9 +3,10 @@
 Layered, declarative system configuration for Arch Linux — packages, `/etc`,
 systemd units and dotfiles through **one** tool and **one** config.
 
-> **Status: early development.** Packages, `/etc` files, services and hooks
-> are managed end to end: `diff`, `apply`, `capture`, `prune`. Dotfiles are
-> next.
+> **Status: early development**, but complete for its own purpose: packages,
+> files anywhere (`/etc` and `$HOME` alike), system and user services, hooks
+> and encrypted sources, all through `diff`, `apply`, `capture` and `prune`.
+> It manages the machine it was written on.
 
 ## Why
 
@@ -76,6 +77,7 @@ written inline. Inline content is a Jinja2 template — the same shape an HTML
 templating engine uses — with every host parameter available as a variable:
 
 ```kdl
+dir  "~/.config/fish"   from="files/home/.config/fish"
 file "/etc/pacman.conf" from="files/pacman.conf"
 
 file "/etc/makepkg.conf.d/99-local.conf" {
@@ -84,6 +86,12 @@ file "/etc/makepkg.conf.d/99-local.conf" {
     """
 }
 ```
+
+A `dir` expands to one declaration per file in the tree, so everything
+downstream works on individual files with no special cases. Only a source named
+`*.tmpl` is treated as a template: rendering everything would break a static
+file containing `{{`, and would make `capture` destroy a template by writing
+the rendered result back into it.
 
 KDL's triple-quoted strings dedent automatically, so the indentation that keeps
 the config readable never reaches the rendered file. Rendered files always end

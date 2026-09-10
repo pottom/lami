@@ -414,7 +414,7 @@ fn cmd_render(
     let raw = target.is_some() && out.is_none();
 
     for (layer, f) in &files {
-        let content = render::file(&r, layer, f, &cfg.settings)?;
+        let content = render::file(&r, layer, f, &cfg.settings, &home, &real_user()?)?;
 
         match out {
             Some(dir) => {

@@ -263,6 +263,16 @@ pub fn capture_file(
     dry: bool,
 ) -> Result<Edit> {
     let source = match &decl.source {
+        crate::config::Source::From(p) if crate::render::is_template(p) => {
+            return Err(Error::Other(format!(
+                "{} comes from a template ({}), which cannot be captured.\n\
+                 \nRendering is not reversible: writing the live file back would\n\
+                 replace the template expressions with whatever they evaluated to,\n\
+                 and the template would be gone. Edit it in the layer instead.",
+                decl.path,
+                p.display()
+            )))
+        }
         crate::config::Source::From(p) => p.clone(),
         crate::config::Source::Text(_) => {
             return Err(Error::Other(format!(
