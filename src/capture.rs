@@ -40,6 +40,7 @@ fn indent_of(leading: &str) -> String {
 }
 
 /// The result of a capture, whether or not it was written.
+#[derive(Debug)]
 pub struct Edit {
     pub file: std::path::PathBuf,
     pub before: String,
