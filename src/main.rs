@@ -475,11 +475,29 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
         );
     }
 
+    // Kept to one line. Silently claiming a match for something we could not
+    // read would be dishonest, but four lines of it on every single run is
+    // noise -- and `sudo lami diff` both answers the question and makes the
+    // notice disappear.
     if !report.skipped.is_empty() {
-        println!("\n{}", color::bold("not compared"));
-        for s in &report.skipped {
-            println!("  {}", color::dim(s));
-        }
+        let n = report.skipped.len();
+        let needs_root = report
+            .skipped
+            .iter()
+            .all(|s| s.contains("not readable as this user"));
+        println!(
+            "{}",
+            color::dim(&if needs_root {
+                format!(
+                    "({n} file{} need root to compare; `sudo lami diff` includes them)",
+                    if n == 1 { "" } else { "s" }
+                )
+            } else {
+                format!("({n} item{} not compared: {})", 
+                    if n == 1 { "" } else { "s" },
+                    report.skipped.join(", "))
+            })
+        );
     }
 
     if show_undeclared {
