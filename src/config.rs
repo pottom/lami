@@ -435,16 +435,60 @@ fn collect(
 
 // ---------------------------------------------------------------------------
 
+/// Repository-wide settings, from an optional `config.kdl` at the root.
+#[derive(Debug, Default)]
+pub struct Settings {
+    /// Where the age identity lives on this machine.
+    pub age_identity: Option<PathBuf>,
+    /// Who encrypted files are encrypted to.
+    pub age_recipients: Vec<String>,
+}
+
 /// The whole parsed config: every host and every layer.
 #[derive(Debug)]
 pub struct Config {
     pub dir: PathBuf,
     pub hosts: BTreeMap<String, Host>,
     pub layers: BTreeMap<String, Layer>,
+    pub settings: Settings,
+}
+
+/// Expand a leading `~/` against the given home directory.
+pub fn expand_home(p: &str, home: &Path) -> PathBuf {
+    match p.strip_prefix("~/") {
+        Some(rest) => home.join(rest),
+        None => PathBuf::from(p),
+    }
+}
+
+fn parse_settings(dir: &Path, home: &Path) -> Result<Settings> {
+    let file = dir.join("config.kdl");
+    if !file.is_file() {
+        return Ok(Settings::default());
+    }
+    let src = read(&file)?;
+    let doc: KdlDocument = src.parse()?;
+    let mut st = Settings::default();
+
+    for node in doc.nodes() {
+        if node.name().value() != "age" {
+            continue;
+        }
+        let Some(children) = node.children() else { continue };
+        for c in children.nodes() {
+            let val = args(c).into_iter().next();
+            match (c.name().value(), val) {
+                ("identity", Some(v)) => st.age_identity = Some(expand_home(&v, home)),
+                ("recipient", Some(v)) => st.age_recipients.push(v),
+                _ => {}
+            }
+        }
+    }
+    Ok(st)
 }
 
 impl Config {
-    pub fn load(dir: &Path) -> Result<Config> {
+    pub fn load(dir: &Path, home: &Path) -> Result<Config> {
         let mut hosts = BTreeMap::new();
         let hosts_dir = dir.join("hosts");
         if hosts_dir.is_dir() {
@@ -490,6 +534,7 @@ impl Config {
             dir: dir.to_path_buf(),
             hosts,
             layers,
+            settings: parse_settings(dir, home)?,
         })
     }
 

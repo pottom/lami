@@ -105,8 +105,13 @@ fn run(cmd: &mut Command) -> Result<()> {
     Ok(())
 }
 
-pub fn run_apply(r: &Resolved<'_>, actor: &Actor, dry: bool) -> Result<usize> {
-    let report = diff::compute(r, &actor.home, &actor.name)?;
+pub fn run_apply(
+    r: &Resolved<'_>,
+    actor: &Actor,
+    dry: bool,
+    settings: &crate::config::Settings,
+) -> Result<usize> {
+    let report = diff::compute(r, &actor.home, &actor.name, settings)?;
 
     if report.changes.is_empty() {
         println!("Nothing to do -- the machine already matches the config.");
@@ -166,9 +171,9 @@ pub fn run_apply(r: &Resolved<'_>, actor: &Actor, dry: bool) -> Result<usize> {
             if !touched {
                 continue;
             }
-            let content = render::file(r, layer, f)?;
+            let content = render::file(r, layer, f, settings)?;
             let pm = perms::with_overrides(
-                perms::infer(&f.path, &actor.name),
+                perms::secret_aware(f, &actor.name),
                 f.owner.as_deref(),
                 f.group.as_deref(),
                 f.mode,

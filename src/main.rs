@@ -10,6 +10,7 @@ mod write;
 mod pacman;
 mod perms;
 mod render;
+mod secret;
 mod state;
 mod systemd;
 
@@ -100,7 +101,7 @@ fn main() -> Result<()> {
         .into());
     }
 
-    let cfg = Config::load(&dir)?;
+    let cfg = Config::load(&dir, &real_home()?)?;
 
     match cli.command {
         Command::List => cmd_list(&cfg),
@@ -232,7 +233,7 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
         }
         found = true;
         let pm = perms::with_overrides(
-            perms::infer(&f.path, &user),
+            perms::secret_aware(f, &user),
             f.owner.as_deref(),
             f.group.as_deref(),
             f.mode,
@@ -371,7 +372,7 @@ fn cmd_render(
         let user = real_user()?;
         for (layer, f) in &files {
             let pm = perms::with_overrides(
-                perms::infer(&f.path, &user),
+                perms::secret_aware(f, &user),
                 f.owner.as_deref(),
                 f.group.as_deref(),
                 f.mode,
@@ -388,7 +389,7 @@ fn cmd_render(
     let raw = target.is_some() && out.is_none();
 
     for (layer, f) in &files {
-        let content = render::file(&r, layer, f)?;
+        let content = render::file(&r, layer, f, &cfg.settings)?;
 
         match out {
             Some(dir) => {
@@ -428,7 +429,7 @@ fn cmd_render(
 fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
     let home = real_home()?;
-    let report = diff::compute(&r, &home, &real_user()?)?;
+    let report = diff::compute(&r, &home, &real_user()?, &cfg.settings)?;
 
     println!("host: {}\n", r.host.name);
 
@@ -494,7 +495,7 @@ fn cmd_apply(cfg: &Config, host: String, dry: bool) -> Result<(), Error> {
     };
 
     println!("host: {}\n", r.host.name);
-    let n = apply::run_apply(&r, &actor, dry)?;
+    let n = apply::run_apply(&r, &actor, dry, &cfg.settings)?;
     if n > 0 && !dry {
         println!("\nApplied {n} change(s).");
     }
@@ -539,7 +540,7 @@ fn cmd_capture(
 
     let Some(package) = package else {
         // No target named: show what is on offer.
-        let report = diff::compute(&r, &real_home()?, &real_user()?)?;
+        let report = diff::compute(&r, &real_home()?, &real_user()?, &cfg.settings)?;
         println!("host: {}\n", r.host.name);
 
         let changed: Vec<&diff::Change> = report

@@ -78,7 +78,7 @@ fn permission_change(
     use std::os::unix::fs::MetadataExt;
 
     let want = perms::with_overrides(
-        perms::infer(&f.path, user),
+        perms::secret_aware(f, user),
         f.owner.as_deref(),
         f.group.as_deref(),
         f.mode,
@@ -99,7 +99,12 @@ fn permission_change(
     })
 }
 
-pub fn compute(r: &Resolved<'_>, home: &std::path::Path, user: &str) -> Result<Report> {
+pub fn compute(
+    r: &Resolved<'_>,
+    home: &std::path::Path,
+    user: &str,
+    settings: &crate::config::Settings,
+) -> Result<Report> {
     let mut changes = Vec::new();
     let mut undeclared_packages = Vec::new();
     let mut skipped = Vec::new();
@@ -144,7 +149,7 @@ pub fn compute(r: &Resolved<'_>, home: &std::path::Path, user: &str) -> Result<R
     let mut touched: Vec<String> = Vec::new();
 
     for (layer, f) in r.files() {
-        let want = render::file(r, layer, f)?;
+        let want = render::file(r, layer, f, settings)?;
         let target = render::target_path(f, home);
         match std::fs::read_to_string(&target) {
             Ok(have) if have == want => {

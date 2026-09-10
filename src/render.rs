@@ -41,16 +41,27 @@ fn context(r: &Resolved<'_>, layer: &Layer) -> JValue {
 }
 
 /// Render one file's content for this host.
-pub fn file(r: &Resolved<'_>, layer: &Layer, decl: &FileDecl) -> Result<String> {
+pub fn file(
+    r: &Resolved<'_>,
+    layer: &Layer,
+    decl: &FileDecl,
+    settings: &crate::config::Settings,
+) -> Result<String> {
     let raw = match &decl.source {
         Source::Text(t) => t.clone(),
+        // A source named *.age is decrypted on the way out. No attribute to
+        // remember, so there is no way to commit a secret in the clear by
+        // forgetting one.
+        Source::From(p) if crate::secret::is_encrypted(p) => {
+            crate::secret::decrypt(p, settings.age_identity.as_deref())?
+        }
         Source::From(p) => fs::read_to_string(p).map_err(|source| Error::Io {
             path: p.clone(),
             source,
         })?,
     };
 
-    let mut env = Environment::new();
+    let mut env = Environment::empty();
 
     // Jinja strips one trailing newline by default -- a convention that makes
     // sense for HTML, and quietly corrupts config files. Without this, a file

@@ -23,6 +23,19 @@ pub struct Perms {
 ///
 /// `user` is the name the tool is acting for -- the owner of `~` paths.
 pub fn infer(path: &str, user: &str) -> Perms {
+    infer_with(path, user, false)
+}
+
+/// As `infer`, but knowing whether the content came from an encrypted source.
+///
+/// Something kept encrypted at rest should not land world-readable just
+/// because of where it happens to go. The encryption is the statement that it
+/// is secret; the mode should follow from that rather than from the path.
+pub fn infer_secret(path: &str, user: &str) -> Perms {
+    infer_with(path, user, true)
+}
+
+fn infer_with(path: &str, user: &str, secret: bool) -> Perms {
     let home = |mode: u32, reason: &str| Perms {
         owner: user.to_string(),
         group: user.to_string(),
@@ -35,6 +48,21 @@ pub fn infer(path: &str, user: &str) -> Perms {
         mode,
         reason: reason.to_string(),
     };
+
+    if secret {
+        // Deliberately before every path rule: an encrypted source outranks
+        // any guess made from the location.
+        let (owner, group) = match path.strip_prefix("~/") {
+            Some(_) => (user.to_string(), user.to_string()),
+            None => ("root".into(), "root".into()),
+        };
+        return Perms {
+            owner,
+            group,
+            mode: 0o600,
+            reason: "decrypted from an encrypted source, so it is not readable by others".into(),
+        };
+    }
 
     if let Some(rest) = path.strip_prefix("~/") {
         // Secrets must not be group- or world-readable, and several tools
@@ -122,10 +150,36 @@ mod tests {
     }
 
     #[test]
+    fn a_decrypted_secret_is_never_world_readable() {
+        // Without this, a secret landing outside ~/.ssh would be written 0644
+        // and the encryption at rest would have bought nothing.
+        let p = infer_secret("/etc/some-service/token", "pottom");
+        assert_eq!(p.mode, 0o600, "{}", p.reason);
+        assert!(p.reason.contains("encrypted"), "{}", p.reason);
+    }
+
+    #[test]
+    fn an_explicit_mode_still_wins_over_a_secret_default() {
+        // Some daemons need to read their own secret as a different user.
+        let p = with_overrides(infer_secret("/etc/x/token", "pottom"), None, Some("nginx"), Some(0o640));
+        assert_eq!((p.mode, p.group.as_str()), (0o640, "nginx"));
+    }
+
+    #[test]
     fn an_explicit_mode_wins_and_says_so() {
         // /etc/snapper/configs/root is 0640, which no path rule could guess.
         let p = with_overrides(infer("/etc/snapper/configs/root", "pottom"), None, None, Some(0o640));
         assert_eq!(p.mode, 0o640);
         assert!(p.reason.contains("explicitly"), "{}", p.reason);
+    }
+}
+
+/// Infer permissions, taking into account whether the source is encrypted.
+pub fn secret_aware(f: &crate::config::FileDecl, user: &str) -> Perms {
+    let encrypted = matches!(&f.source, crate::config::Source::From(p) if crate::secret::is_encrypted(p));
+    if encrypted {
+        infer_secret(&f.path, user)
+    } else {
+        infer(&f.path, user)
     }
 }

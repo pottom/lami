@@ -215,6 +215,39 @@ why a package is there. Verified against a real config — adding one package
 produced exactly one added line and zero deleted ones, with every end-of-line
 comment intact.
 
+## Secrets
+
+A source file whose name ends in `.age` is decrypted on the way out:
+
+```kdl
+file "~/.ssh/config" from="files/ssh-config.age"
+```
+
+That is the whole interface. There is no attribute to remember, so there is no
+way to commit a secret in the clear by forgetting one.
+
+Point lami at your key in `config.kdl` at the root of the config directory:
+
+```kdl
+age {
+    identity  "~/.config/lami/identity.txt"
+    recipient "age1..."          // may be repeated
+}
+```
+
+`age` is called as a program rather than linked as a library — the same
+reasoning as pacman, and it means a YubiKey works through
+`age-plugin-yubikey` without lami knowing anything about smartcards.
+
+**A decrypted file is never world-readable.** Whatever the path rules would
+have said, content that was kept encrypted at rest is written `0600`; the
+encryption is the statement that it is secret, so the mode follows from that
+rather than from where it happens to land. An explicit `mode=` still wins, for
+the daemon that has to read its own secret as another user.
+
+Getting the first key onto a new machine is the one step that cannot be
+automated — by definition. lami says so plainly rather than failing obscurely.
+
 ## Pruning
 
 `apply` never removes anything, so removal is a separate command:
