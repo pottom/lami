@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use kdl::{KdlDocument, KdlNode, KdlValue};
 use miette::NamedSource;
 
-use crate::error::{Error, Result};
+use crate::error::{ConfigError, Error, Result, UnknownLayerError};
 
 /// Where a declaration came from. This is what `lami why` reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,12 +360,12 @@ impl Host {
         }
 
         if layers.is_empty() {
-            return Err(Error::Config {
+            return Err(Error::Config(Box::new(ConfigError {
                 msg: format!("host '{name}' declares no layers"),
                 src: named(path, &src),
                 span: (0, src.len().min(1)).into(),
                 label: "the `layers` line is missing".into(),
-            });
+            })));
         }
 
         Ok(Host {
@@ -423,20 +423,16 @@ fn collect(
             "packages" => layer
                 .packages
                 .extend(names_from(node, src, path, cond.as_ref())),
-            "services" => layer.services.extend(units_from(
-                node,
-                src,
-                path,
-                cond.as_ref(),
-                Scope::System,
-            )?),
-            "user-services" => layer.services.extend(units_from(
-                node,
-                src,
-                path,
-                cond.as_ref(),
-                Scope::User,
-            )?),
+            "services" => {
+                layer
+                    .services
+                    .extend(units_from(node, src, path, cond.as_ref(), Scope::System)?)
+            }
+            "user-services" => {
+                layer
+                    .services
+                    .extend(units_from(node, src, path, cond.as_ref(), Scope::User)?)
+            }
             "when" => {
                 // `when gpu="nvidia" { ... }` -- exactly one property
                 let props: Vec<(&str, &KdlValue)> = node
@@ -446,12 +442,12 @@ fn collect(
                     .collect();
 
                 if props.len() != 1 {
-                    return Err(Error::Config {
+                    return Err(Error::Config(Box::new(ConfigError {
                         msg: "`when` takes exactly one condition".into(),
                         src: named(path, src),
                         span: (node.span().offset(), node.span().len()).into(),
                         label: "e.g. `when gpu=\"nvidia\" { ... }`".into(),
-                    });
+                    })));
                 }
                 let (key, val) = props[0];
                 let inner = Condition {
@@ -487,20 +483,22 @@ fn collect(
                                 _ => None,
                             })
                     })
-                    .ok_or_else(|| Error::Config {
+                    .ok_or_else(|| {
+                        Error::Config(Box::new(ConfigError {
                         msg: "`on-change` needs a `run` command".into(),
                         src: named(path, src),
                         span: (node.span().offset(), node.span().len()).into(),
                         label: "e.g. `on-change \"/etc/mkinitcpio.conf\" { run \"mkinitcpio -P\" }`"
                             .into(),
+                    }))
                     })?;
                 if watch.is_empty() {
-                    return Err(Error::Config {
+                    return Err(Error::Config(Box::new(ConfigError {
                         msg: "`on-change` needs at least one path to watch".into(),
                         src: named(path, src),
                         span: (node.span().offset(), node.span().len()).into(),
                         label: "which file should trigger this?".into(),
-                    });
+                    })));
                 }
                 layer.hooks.push(Hook {
                     watch,
@@ -559,7 +557,9 @@ fn parse_settings(dir: &Path, home: &Path) -> Result<Settings> {
         if node.name().value() != "age" {
             continue;
         }
-        let Some(children) = node.children() else { continue };
+        let Some(children) = node.children() else {
+            continue;
+        };
         for c in children.nodes() {
             let val = args(c).into_iter().next();
             match (c.name().value(), val) {
@@ -658,11 +658,11 @@ impl Config {
         let layer = self.layers.get(name).ok_or_else(|| {
             let src = fs::read_to_string(&host.origin).unwrap_or_default();
             let off = src.find(name).unwrap_or(0);
-            Error::UnknownLayer {
+            Error::UnknownLayer(Box::new(UnknownLayerError {
                 layer: name.to_string(),
                 src: named(&host.origin, &src),
                 span: (off, name.len()).into(),
-            }
+            }))
         })?;
         // Dependencies first, so the order is deterministic.
         for dep in &layer.needs {
@@ -765,7 +765,6 @@ impl Resolved<'_> {
     }
 }
 
-
 /// `file "/etc/foo" from="foo.conf"` or `file "/etc/foo" { text "..." }`
 fn parse_file(
     node: &KdlNode,
@@ -776,20 +775,22 @@ fn parse_file(
 ) -> Result<FileDecl> {
     let span = (node.span().offset(), node.span().len());
 
-    let target = args(node).into_iter().next().ok_or_else(|| Error::Config {
-        msg: "`file` needs a target path".into(),
-        src: named(path, src),
-        span: span.into(),
-        label: "e.g. `file \"/etc/foo.conf\" from=\"foo.conf\"`".into(),
+    let target = args(node).into_iter().next().ok_or_else(|| {
+        Error::Config(Box::new(ConfigError {
+            msg: "`file` needs a target path".into(),
+            src: named(path, src),
+            span: span.into(),
+            label: "e.g. `file \"/etc/foo.conf\" from=\"foo.conf\"`".into(),
+        }))
     })?;
 
     let prop = |key: &str| -> Option<String> {
         node.entries()
             .iter()
             .find(|e| e.name().is_some_and(|n| n.value() == key))
-            .and_then(|e| match e.value() {
-                KdlValue::String(s) => Some(s.clone()),
-                other => Some(other.to_string()),
+            .map(|e| match e.value() {
+                KdlValue::String(s) => s.clone(),
+                other => other.to_string(),
             })
     };
 
@@ -802,14 +803,16 @@ fn parse_file(
     // else entirely.
     let mode = match prop("mode") {
         None => None,
-        Some(m) => Some(u32::from_str_radix(m.trim_start_matches("0o"), 8).map_err(|_| {
-            Error::Config {
-                msg: format!("`{m}` is not a valid octal mode"),
-                src: named(path, src),
-                span: span.into(),
-                label: "write it as a string, e.g. mode=\"0640\"".into(),
-            }
-        })?),
+        Some(m) => Some(
+            u32::from_str_radix(m.trim_start_matches("0o"), 8).map_err(|_| {
+                Error::Config(Box::new(ConfigError {
+                    msg: format!("`{m}` is not a valid octal mode"),
+                    src: named(path, src),
+                    span: span.into(),
+                    label: "write it as a string, e.g. mode=\"0640\"".into(),
+                }))
+            })?,
+        ),
     };
 
     let text = node.children().and_then(|c| {
@@ -826,20 +829,20 @@ fn parse_file(
         (Some(f), None) => Source::From(layer_dir.join(f)),
         (None, Some(t)) => Source::Text(t),
         (Some(_), Some(_)) => {
-            return Err(Error::Config {
+            return Err(Error::Config(Box::new(ConfigError {
                 msg: format!("`{target}` declares both `from=` and `text`"),
                 src: named(path, src),
                 span: span.into(),
                 label: "pick one".into(),
-            })
+            })))
         }
         (None, None) => {
-            return Err(Error::Config {
+            return Err(Error::Config(Box::new(ConfigError {
                 msg: format!("`{target}` has no content"),
                 src: named(path, src),
                 span: span.into(),
                 label: "add `from=\"file\"` or a `text` child".into(),
-            })
+            })))
         }
     };
 
@@ -904,12 +907,12 @@ fn units_from(
                     "masked" => state = UnitState::Masked,
                     "restart-on-change" => restart = true,
                     other => {
-                        return Err(Error::Config {
+                        return Err(Error::Config(Box::new(ConfigError {
                             msg: format!("`{other}` is not a unit state"),
                             src: named(path, src),
                             span: (child.span().offset(), child.span().len()).into(),
                             label: "expected enabled, disabled, masked or restart-on-change".into(),
-                        })
+                        })))
                     }
                 }
             }
@@ -948,11 +951,13 @@ fn parse_dir(
 ) -> Result<Vec<FileDecl>> {
     let span = (node.span().offset(), node.span().len());
 
-    let target = args(node).into_iter().next().ok_or_else(|| Error::Config {
-        msg: "`dir` needs a target path".into(),
-        src: named(path, src),
-        span: span.into(),
-        label: "e.g. `dir \"~/.config/fish\" from=\"files/fish\"`".into(),
+    let target = args(node).into_iter().next().ok_or_else(|| {
+        Error::Config(Box::new(ConfigError {
+            msg: "`dir` needs a target path".into(),
+            src: named(path, src),
+            span: span.into(),
+            label: "e.g. `dir \"~/.config/fish\" from=\"files/fish\"`".into(),
+        }))
     })?;
 
     let from = node
@@ -963,21 +968,23 @@ fn parse_dir(
             KdlValue::String(s) => Some(s.clone()),
             _ => None,
         })
-        .ok_or_else(|| Error::Config {
-            msg: format!("`{target}` has no source directory"),
-            src: named(path, src),
-            span: span.into(),
-            label: "add `from=\"files/...\"`".into(),
+        .ok_or_else(|| {
+            Error::Config(Box::new(ConfigError {
+                msg: format!("`{target}` has no source directory"),
+                src: named(path, src),
+                span: span.into(),
+                label: "add `from=\"files/...\"`".into(),
+            }))
         })?;
 
     let root = layer_dir.join(&from);
     if !root.is_dir() {
-        return Err(Error::Config {
+        return Err(Error::Config(Box::new(ConfigError {
             msg: format!("{} is not a directory", root.display()),
             src: named(path, src),
             span: span.into(),
             label: "`dir` copies a tree; use `file` for a single file".into(),
-        });
+        })));
     }
 
     let line = line_of(src, node.span().offset());

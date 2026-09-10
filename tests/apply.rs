@@ -35,7 +35,10 @@ impl Fixture {
         .unwrap();
         fs::write(
             cfg.join("layers/only/layer.kdl"),
-            format!("description \"fixture\"\n\n{}", layer_body.replace("{base}", base.to_str().unwrap())),
+            format!(
+                "description \"fixture\"\n\n{}",
+                layer_body.replace("{base}", base.to_str().unwrap())
+            ),
         )
         .unwrap();
         Fixture { base }
@@ -101,7 +104,10 @@ fn apply_writes_and_is_idempotent() {
 
     let (out, ok) = f.run(&["apply"]);
     assert!(ok, "{out}");
-    assert_eq!(fs::read_to_string(f.base.join("target")).unwrap(), "content\n");
+    assert_eq!(
+        fs::read_to_string(f.base.join("target")).unwrap(),
+        "content\n"
+    );
 
     let (again, ok) = f.run(&["apply"]);
     assert!(ok, "{again}");
@@ -124,7 +130,11 @@ fn an_explicit_mode_is_honoured() {
     );
     let (out, ok) = f.run(&["apply"]);
     assert!(ok, "{out}");
-    let mode = fs::metadata(f.base.join("secret")).unwrap().permissions().mode() & 0o777;
+    let mode = fs::metadata(f.base.join("secret"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
     assert_eq!(mode, 0o600, "got {mode:o}");
 }
 
@@ -142,7 +152,10 @@ fn a_hook_runs_only_after_its_file_changes() {
 
     let (out, ok) = f.run(&["apply"]);
     assert!(ok, "{out}");
-    assert!(f.base.join("ran").exists(), "the hook should have run:\n{out}");
+    assert!(
+        f.base.join("ran").exists(),
+        "the hook should have run:\n{out}"
+    );
 
     fs::remove_file(f.base.join("ran")).unwrap();
     let (again, ok) = f.run(&["apply"]);
@@ -162,7 +175,11 @@ fn capture_dry_run_writes_nothing() {
     let cfg = base.join("cfg");
     fs::create_dir_all(cfg.join("hosts")).unwrap();
     fs::create_dir_all(cfg.join("layers/only")).unwrap();
-    fs::write(cfg.join("hosts/testbox.kdl"), "description \"f\"\nlayers \"only\"\n").unwrap();
+    fs::write(
+        cfg.join("hosts/testbox.kdl"),
+        "description \"f\"\nlayers \"only\"\n",
+    )
+    .unwrap();
 
     let layer = cfg.join("layers/only/layer.kdl");
     let original = "description \"f\"\n\npackages {\n    bash    // a comment worth keeping\n}\n";
@@ -171,12 +188,22 @@ fn capture_dry_run_writes_nothing() {
     let exe = env!("CARGO_BIN_EXE_lami");
     let out = Command::new(exe)
         .args(["--config-dir", cfg.to_str().unwrap(), "--host", "testbox"])
-        .args(["capture", "--package", "cowsay", "--layer", "only", "--dry-run"])
+        .args([
+            "capture",
+            "--package",
+            "cowsay",
+            "--layer",
+            "only",
+            "--dry-run",
+        ])
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
 
-    assert!(text.contains("+    cowsay"), "should show the edit:\n{text}");
+    assert!(
+        text.contains("+    cowsay"),
+        "should show the edit:\n{text}"
+    );
     assert!(text.contains("nothing was written"), "{text}");
     assert_eq!(
         fs::read_to_string(&layer).unwrap(),

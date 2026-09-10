@@ -198,5 +198,8 @@ fn a_wrong_mode_is_reported_even_when_content_matches() {
     let (out, ok) = f.run(&["diff"]);
     assert!(ok, "{out}");
     assert!(out.contains("chmod"), "{out}");
-    assert!(out.contains("mode is 600, should be 644"), "should say both modes in words:\n{out}");
+    assert!(
+        out.contains("mode is 600, should be 644"),
+        "should say both modes in words:\n{out}"
+    );
 }

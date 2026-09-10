@@ -41,7 +41,11 @@ pub enum Change {
         have: String,
     },
     /// A watched file will change, so this command has to run afterwards.
-    RunHook { run: String, layer: String, because: String },
+    RunHook {
+        run: String,
+        layer: String,
+        because: String,
+    },
 }
 
 impl Change {
@@ -133,9 +137,9 @@ impl Change {
                 _ => changed(s),
             },
             Change::UpdateFile { .. } | Change::FixPermissions { .. } => changed(s),
-            Change::RunHook { .. }
-            | Change::DaemonReload { .. }
-            | Change::RestartUnit { .. } => action(s),
+            Change::RunHook { .. } | Change::DaemonReload { .. } | Change::RestartUnit { .. } => {
+                action(s)
+            }
         }
     }
 

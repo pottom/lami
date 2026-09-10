@@ -37,7 +37,10 @@ fn needs_dependencies_are_resolved() {
     assert!(ok, "{out}");
     assert!(out.contains("core"), "{out}");
     assert!(out.contains("gui"), "{out}");
-    assert!(!out.contains("rice"), "sam must not receive the rice layer:\n{out}");
+    assert!(
+        !out.contains("rice"),
+        "sam must not receive the rice layer:\n{out}"
+    );
 }
 
 #[test]
@@ -58,7 +61,10 @@ fn the_gpu_condition_separates_hosts() {
     assert!(frodo.contains("gpu=intel"), "{frodo}");
 
     let (sam, _) = lami(&["--host", "sam", "why", "intel-media-driver"]);
-    assert!(sam.contains("is not declared"), "sam is NVIDIA, must not get iHD:\n{sam}");
+    assert!(
+        sam.contains("is not declared"),
+        "sam is NVIDIA, must not get iHD:\n{sam}"
+    );
 
     let (sam_nv, _) = lami(&["--host", "sam", "why", "nvidia-open"]);
     assert!(sam_nv.contains("gpu=nvidia"), "{sam_nv}");

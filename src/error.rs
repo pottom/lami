@@ -10,6 +10,9 @@ use std::path::PathBuf;
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
+/// The two variants that quote config source are boxed: they carry a whole
+/// file's text, and `Result<T, Error>` is the return type of nearly every
+/// function here. Without the box the happy path pays for the error path.
 #[derive(Debug, Error, Diagnostic)]
 pub enum Error {
     #[error("cannot read {path}")]
@@ -31,30 +34,42 @@ pub enum Error {
     )]
     UnknownHost { name: String, known: String },
 
-    #[error("layer '{layer}' does not exist")]
-    #[diagnostic(code(lami::unknown_layer))]
-    UnknownLayer {
-        layer: String,
-        #[source_code]
-        src: NamedSource<String>,
-        #[label("referenced here")]
-        span: SourceSpan,
-    },
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    UnknownLayer(Box<UnknownLayerError>),
 
-    #[error("{msg}")]
-    #[diagnostic(code(lami::config))]
-    Config {
-        msg: String,
-        #[source_code]
-        src: NamedSource<String>,
-        #[label("{label}")]
-        span: SourceSpan,
-        label: String,
-    },
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Config(Box<ConfigError>),
 
     #[error("{0}")]
     #[diagnostic(code(lami::other))]
     Other(String),
+}
+
+/// A layer name that no layer directory answers to.
+#[derive(Debug, Error, Diagnostic)]
+#[error("layer '{layer}' does not exist")]
+#[diagnostic(code(lami::unknown_layer))]
+pub struct UnknownLayerError {
+    pub layer: String,
+    #[source_code]
+    pub src: NamedSource<String>,
+    #[label("referenced here")]
+    pub span: SourceSpan,
+}
+
+/// Anything wrong with the config that we can point at a line of.
+#[derive(Debug, Error, Diagnostic)]
+#[error("{msg}")]
+#[diagnostic(code(lami::config))]
+pub struct ConfigError {
+    pub msg: String,
+    #[source_code]
+    pub src: NamedSource<String>,
+    #[label("{label}")]
+    pub span: SourceSpan,
+    pub label: String,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

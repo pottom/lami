@@ -48,8 +48,7 @@ fn install(names: &[String], actor: &Actor) -> Result<()> {
         return Ok(());
     }
     let sync = pacman::sync_packages()?;
-    let (repo, aur): (Vec<&String>, Vec<&String>) =
-        names.iter().partition(|n| sync.contains(*n));
+    let (repo, aur): (Vec<&String>, Vec<&String>) = names.iter().partition(|n| sync.contains(*n));
 
     if !repo.is_empty() {
         println!("  pacman -S --needed  ({} package(s))", repo.len());
@@ -63,7 +62,10 @@ fn install(names: &[String], actor: &Actor) -> Result<()> {
             Error::Other(format!(
                 "{} package(s) need an AUR helper, and none is installed:\n  {}",
                 aur.len(),
-                aur.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                aur.iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ))
         })?;
         println!(
@@ -157,7 +159,9 @@ pub fn run_apply(
         .filter(|c| {
             matches!(
                 c,
-                Change::CreateFile { .. } | Change::UpdateFile { .. } | Change::FixPermissions { .. }
+                Change::CreateFile { .. }
+                    | Change::UpdateFile { .. }
+                    | Change::FixPermissions { .. }
             )
         })
         .collect();
@@ -352,15 +356,29 @@ pub fn stale(r: &Resolved<'_>, actor: &Actor) -> Stale {
 }
 
 pub fn run_prune(s: &Stale, actor: &Actor) -> Result<()> {
-    if !s.services.is_empty() {
+    if !s.services.is_empty() || !s.user_services.is_empty() {
         println!("{}", crate::color::bold("services:"));
-        // Disabled, not stopped. Stopping a display manager out from under a
-        // running session because a layer was edited would be indefensible.
-        run(Command::new("systemctl")
+    }
+    // Disabled, not stopped. Stopping a display manager out from under a
+    // running session because a layer was edited would be indefensible.
+    //
+    // Scope is not cosmetic: `systemctl disable` in system scope for a unit
+    // that was enabled in user scope succeeds and does nothing at all.
+    for (scope, units) in [
+        (crate::config::Scope::System, &s.services),
+        (crate::config::Scope::User, &s.user_services),
+    ] {
+        if units.is_empty() {
+            continue;
+        }
+        run(systemd::cmd(scope, &actor.name)
             .arg("disable")
-            .args(s.services.iter().map(|x| x.as_str())))?;
-        for u in &s.services {
-            println!("  {u} disabled");
+            .args(units.iter().map(|x| x.as_str())))?;
+        for u in units {
+            match scope {
+                crate::config::Scope::User => println!("  {u} disabled (user)"),
+                _ => println!("  {u} disabled"),
+            }
         }
     }
     if !s.files.is_empty() {

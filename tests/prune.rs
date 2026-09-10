@@ -115,7 +115,10 @@ fn nothing_is_removed_without_force() {
     let (out, ok) = f.run(&["prune"]);
     assert!(ok, "{out}");
     assert!(out.contains("Nothing was removed"), "{out}");
-    assert!(out.contains("--force"), "should say how to go ahead:\n{out}");
+    assert!(
+        out.contains("--force"),
+        "should say how to go ahead:\n{out}"
+    );
     assert!(target.exists(), "the file must still be there");
 }
 

@@ -46,19 +46,17 @@ pub fn gid_of(name: &str) -> Option<u32> {
 
 /// Write `content` to `target` with the given ownership and mode.
 pub fn write(target: &Path, content: &str, owner: &str, group: &str, mode: u32) -> Result<()> {
-    let parent = target.parent().ok_or_else(|| {
-        Error::Other(format!("{} has no parent directory", target.display()))
-    })?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| Error::Other(format!("{} has no parent directory", target.display())))?;
 
     std::fs::create_dir_all(parent).map_err(|source| Error::Io {
         path: parent.to_path_buf(),
         source,
     })?;
 
-    let uid = uid_of(owner)
-        .ok_or_else(|| Error::Other(format!("no such user: {owner}")))?;
-    let gid = gid_of(group)
-        .ok_or_else(|| Error::Other(format!("no such group: {group}")))?;
+    let uid = uid_of(owner).ok_or_else(|| Error::Other(format!("no such user: {owner}")))?;
+    let gid = gid_of(group).ok_or_else(|| Error::Other(format!("no such group: {group}")))?;
 
     // In the target's own directory, so the rename below cannot hit EXDEV.
     let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|source| Error::Io {
@@ -66,10 +64,11 @@ pub fn write(target: &Path, content: &str, owner: &str, group: &str, mode: u32) 
         source,
     })?;
 
-    tmp.write_all(content.as_bytes()).map_err(|source| Error::Io {
-        path: target.to_path_buf(),
-        source,
-    })?;
+    tmp.write_all(content.as_bytes())
+        .map_err(|source| Error::Io {
+            path: target.to_path_buf(),
+            source,
+        })?;
 
     let fd = tmp.as_file().as_raw_fd();
 

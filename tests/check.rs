@@ -51,7 +51,10 @@ fn separates_out_aur_packages() {
         return;
     }
     let (out, ok) = lami_path(None, &["--host", "frodo", "check"]);
-    assert!(ok, "this machine has an AUR helper, so it should succeed:\n{out}");
+    assert!(
+        ok,
+        "this machine has an AUR helper, so it should succeed:\n{out}"
+    );
     assert!(out.contains("caelestia-shell"), "{out}");
 }
 
@@ -75,5 +78,8 @@ fn errors_without_an_aur_helper() {
     assert!(out.contains("NO AUR helper"), "{out}");
     // The error should be actionable, not just a complaint.
     assert!(out.contains("makepkg -si"), "should offer a fix:\n{out}");
-    assert!(out.contains("lami why"), "should point at where to fix it:\n{out}");
+    assert!(
+        out.contains("lami why"),
+        "should point at where to fix it:\n{out}"
+    );
 }

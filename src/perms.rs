@@ -71,7 +71,10 @@ fn infer_with(path: &str, user: &str, secret: bool) -> Perms {
             return home(0o600, "under ~/.ssh, which must not be readable by others");
         }
         if rest.starts_with(".gnupg/") {
-            return home(0o600, "under ~/.gnupg, which must not be readable by others");
+            return home(
+                0o600,
+                "under ~/.gnupg, which must not be readable by others",
+            );
         }
         // Scripts placed on PATH are meant to be run.
         if rest.starts_with(".local/bin/") {
@@ -115,6 +118,17 @@ pub fn with_overrides(
         p.reason = format!("{} set explicitly in the layer", explicit.join(" and "));
     }
     p
+}
+
+/// Infer permissions, taking into account whether the source is encrypted.
+pub fn secret_aware(f: &crate::config::FileDecl, user: &str) -> Perms {
+    let encrypted =
+        matches!(&f.source, crate::config::Source::From(p) if crate::secret::is_encrypted(p));
+    if encrypted {
+        infer_secret(&f.path, user)
+    } else {
+        infer(&f.path, user)
+    }
 }
 
 #[cfg(test)]
@@ -161,25 +175,25 @@ mod tests {
     #[test]
     fn an_explicit_mode_still_wins_over_a_secret_default() {
         // Some daemons need to read their own secret as a different user.
-        let p = with_overrides(infer_secret("/etc/x/token", "pottom"), None, Some("nginx"), Some(0o640));
+        let p = with_overrides(
+            infer_secret("/etc/x/token", "pottom"),
+            None,
+            Some("nginx"),
+            Some(0o640),
+        );
         assert_eq!((p.mode, p.group.as_str()), (0o640, "nginx"));
     }
 
     #[test]
     fn an_explicit_mode_wins_and_says_so() {
         // /etc/snapper/configs/root is 0640, which no path rule could guess.
-        let p = with_overrides(infer("/etc/snapper/configs/root", "pottom"), None, None, Some(0o640));
+        let p = with_overrides(
+            infer("/etc/snapper/configs/root", "pottom"),
+            None,
+            None,
+            Some(0o640),
+        );
         assert_eq!(p.mode, 0o640);
         assert!(p.reason.contains("explicitly"), "{}", p.reason);
-    }
-}
-
-/// Infer permissions, taking into account whether the source is encrypted.
-pub fn secret_aware(f: &crate::config::FileDecl, user: &str) -> Perms {
-    let encrypted = matches!(&f.source, crate::config::Source::From(p) if crate::secret::is_encrypted(p));
-    if encrypted {
-        infer_secret(&f.path, user)
-    } else {
-        infer(&f.path, user)
     }
 }

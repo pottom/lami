@@ -124,7 +124,10 @@ pub fn unit_of_path(path: &str) -> Option<String> {
 }
 
 pub fn is_enabled(unit: &str) -> State {
-    let out = match Command::new("systemctl").args(["is-enabled", unit]).output() {
+    let out = match Command::new("systemctl")
+        .args(["is-enabled", unit])
+        .output()
+    {
         Ok(o) => o,
         Err(_) => return State::NotFound,
     };

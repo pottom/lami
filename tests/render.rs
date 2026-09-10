@@ -34,17 +34,32 @@ fn lists_the_managed_paths() {
 #[test]
 fn substitutes_host_parameters() {
     // cpu_threads is 8 on frodo and 16 on sam.
-    let (frodo, ok) = lami(&["--host", "frodo", "render", "/etc/makepkg.conf.d/99-local.conf"]);
+    let (frodo, ok) = lami(&[
+        "--host",
+        "frodo",
+        "render",
+        "/etc/makepkg.conf.d/99-local.conf",
+    ]);
     assert!(ok, "{frodo}");
     assert!(frodo.contains(r#"MAKEFLAGS="-j8""#), "{frodo}");
 
-    let (sam, _) = lami(&["--host", "sam", "render", "/etc/makepkg.conf.d/99-local.conf"]);
+    let (sam, _) = lami(&[
+        "--host",
+        "sam",
+        "render",
+        "/etc/makepkg.conf.d/99-local.conf",
+    ]);
     assert!(sam.contains(r#"MAKEFLAGS="-j16""#), "{sam}");
 }
 
 #[test]
 fn a_conditional_file_follows_the_gpu() {
-    let (frodo, _) = lami(&["--host", "frodo", "render", "/etc/environment.d/50-gpu.conf"]);
+    let (frodo, _) = lami(&[
+        "--host",
+        "frodo",
+        "render",
+        "/etc/environment.d/50-gpu.conf",
+    ]);
     assert!(frodo.contains("LIBVA_DRIVER_NAME=iHD"), "{frodo}");
 
     let (sam, _) = lami(&["--host", "sam", "render", "/etc/environment.d/50-gpu.conf"]);
@@ -55,8 +70,16 @@ fn a_conditional_file_follows_the_gpu() {
 fn multiline_text_is_dedented() {
     // KDL v2 strips the indentation used to keep the config readable, so it
     // must not leak into the rendered file.
-    let (out, _) = lami(&["--host", "frodo", "render", "/etc/makepkg.conf.d/99-local.conf"]);
-    assert!(out.starts_with("#!/hint/bash"), "leading indent leaked:\n{out:?}");
+    let (out, _) = lami(&[
+        "--host",
+        "frodo",
+        "render",
+        "/etc/makepkg.conf.d/99-local.conf",
+    ]);
+    assert!(
+        out.starts_with("#!/hint/bash"),
+        "leading indent leaked:\n{out:?}"
+    );
 }
 
 #[test]
@@ -73,19 +96,16 @@ fn writes_a_tree_that_mirrors_the_target_paths() {
     let dir = std::env::temp_dir().join(format!("lami-render-{}", std::process::id()));
     std::fs::remove_dir_all(&dir).ok();
 
-    let (out, ok) = lami(&[
-        "--host",
-        "frodo",
-        "render",
-        "--out",
-        dir.to_str().unwrap(),
-    ]);
+    let (out, ok) = lami(&["--host", "frodo", "render", "--out", dir.to_str().unwrap()]);
     assert!(ok, "{out}");
 
     // The tree mirrors absolute paths so it can be diffed against the live
     // system directly.
     assert!(dir.join("etc/pacman.conf").is_file(), "{out}");
-    assert!(dir.join("etc/makepkg.conf.d/99-local.conf").is_file(), "{out}");
+    assert!(
+        dir.join("etc/makepkg.conf.d/99-local.conf").is_file(),
+        "{out}"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -94,7 +114,10 @@ fn writes_a_tree_that_mirrors_the_target_paths() {
 fn an_unmanaged_path_is_an_error() {
     let (out, ok) = lami(&["--host", "frodo", "render", "/etc/not-managed"]);
     assert!(!ok, "must exit with an error:\n{out}");
-    assert!(out.contains("--list"), "should point at how to see the paths:\n{out}");
+    assert!(
+        out.contains("--list"),
+        "should point at how to see the paths:\n{out}"
+    );
 }
 
 #[test]
@@ -109,7 +132,11 @@ fn trailing_blank_lines_are_preserved() {
     std::fs::create_dir_all(dir.join("layers/only/files")).unwrap();
 
     std::fs::write(dir.join("layers/only/files/keep"), "line\n\n").unwrap();
-    std::fs::write(dir.join("hosts/h.kdl"), "description \"x\"\nlayers \"only\"\n").unwrap();
+    std::fs::write(
+        dir.join("hosts/h.kdl"),
+        "description \"x\"\nlayers \"only\"\n",
+    )
+    .unwrap();
     std::fs::write(
         dir.join("layers/only/layer.kdl"),
         "description \"x\"\nfile \"/tmp/lami-nl-target\" from=\"files/keep\"\n",
@@ -135,7 +162,13 @@ fn piped_output_carries_no_escape_codes() {
     // so nothing may be coloured.
     let exe = env!("CARGO_BIN_EXE_lami");
     let out = std::process::Command::new(exe)
-        .args(["--config-dir", "examples/minimal", "--host", "frodo", "show"])
+        .args([
+            "--config-dir",
+            "examples/minimal",
+            "--host",
+            "frodo",
+            "show",
+        ])
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
@@ -149,10 +182,7 @@ fn piped_output_carries_no_escape_codes() {
 fn no_color_is_accepted_everywhere() {
     // --no-color is a global flag, so it has to work after the subcommand too.
     let exe = env!("CARGO_BIN_EXE_lami");
-    for args in [
-        vec!["--no-color", "list"],
-        vec!["list", "--no-color"],
-    ] {
+    for args in [vec!["--no-color", "list"], vec!["list", "--no-color"]] {
         let out = std::process::Command::new(exe)
             .args(["--config-dir", "examples/minimal"])
             .args(&args)

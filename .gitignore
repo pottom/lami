@@ -1,1 +1,8 @@
 /target
+
+# makepkg output. `makepkg` in packaging/ leaves the source tarball, the built
+# packages and its own src/pkg trees behind.
+*.pkg.tar.zst
+*.tar.gz
+packaging/src/
+packaging/pkg/

@@ -92,11 +92,7 @@ pub fn add_package(layer_file: &Path, package: &str, dry: bool) -> Result<Edit> 
 
     let children = node.ensure_children();
 
-    if children
-        .nodes()
-        .iter()
-        .any(|n| n.name().value() == package)
-    {
+    if children.nodes().iter().any(|n| n.name().value() == package) {
         return Err(Error::Other(format!(
             "{package} is already declared in {}",
             layer_file.display()
@@ -135,6 +131,57 @@ pub fn add_package(layer_file: &Path, package: &str, dry: bool) -> Result<Edit> 
     Ok(Edit {
         file: layer_file.to_path_buf(),
         before: src,
+        after,
+    })
+}
+
+/// Copy a file's live content back into the layer that declares it.
+///
+/// Only `from=` sources can round-trip. An inline `text` block may contain
+/// template expressions, and rendering is not reversible -- there is no way to
+/// tell which part of the result came from `{{ cpu_threads }}`. Rather than
+/// guess, those are reported as needing a hand edit, which is also why the
+/// layer files in this repo prefer `from=` for anything likely to be tweaked
+/// in place.
+pub fn capture_file(decl: &crate::config::FileDecl, live: &Path, dry: bool) -> Result<Edit> {
+    let source = match &decl.source {
+        crate::config::Source::From(p) if crate::render::is_template(p) => {
+            return Err(Error::Other(format!(
+                "{} comes from a template ({}), which cannot be captured.\n\
+                 \nRendering is not reversible: writing the live file back would\n\
+                 replace the template expressions with whatever they evaluated to,\n\
+                 and the template would be gone. Edit it in the layer instead.",
+                decl.path,
+                p.display()
+            )))
+        }
+        crate::config::Source::From(p) => p.clone(),
+        crate::config::Source::Text(_) => {
+            return Err(Error::Other(format!(
+                "{} is declared as an inline `text` block, which cannot be captured.\n\
+                 \nRendering is not reversible: there is no way to tell which part of the\n\
+                 file came from a template expression. Edit it in the layer instead:\n\
+                 \n  {}",
+                decl.path, decl.origin
+            )))
+        }
+    };
+
+    let after = std::fs::read_to_string(live).map_err(|source| Error::Io {
+        path: live.to_path_buf(),
+        source,
+    })?;
+    let before = std::fs::read_to_string(&source).unwrap_or_default();
+
+    if !dry {
+        std::fs::write(&source, &after).map_err(|e| Error::Io {
+            path: source.clone(),
+            source: e,
+        })?;
+    }
+    Ok(Edit {
+        file: source,
+        before,
         after,
     })
 }
@@ -225,7 +272,8 @@ services {
         add_package(&p, "ripgrep", false).unwrap();
         let out = std::fs::read_to_string(&p).unwrap();
         assert_eq!(
-            out.matches("// a standalone note about the next one").count(),
+            out.matches("// a standalone note about the next one")
+                .count(),
             1,
             "the comment was duplicated:\n{out}"
         );
@@ -247,59 +295,4 @@ services {
         assert!(err.to_string().contains("packages {"), "{err}");
         std::fs::remove_file(&p).ok();
     }
-}
-
-/// Copy a file's live content back into the layer that declares it.
-///
-/// Only `from=` sources can round-trip. An inline `text` block may contain
-/// template expressions, and rendering is not reversible -- there is no way to
-/// tell which part of the result came from `{{ cpu_threads }}`. Rather than
-/// guess, those are reported as needing a hand edit, which is also why the
-/// layer files in this repo prefer `from=` for anything likely to be tweaked
-/// in place.
-pub fn capture_file(
-    decl: &crate::config::FileDecl,
-    live: &Path,
-    dry: bool,
-) -> Result<Edit> {
-    let source = match &decl.source {
-        crate::config::Source::From(p) if crate::render::is_template(p) => {
-            return Err(Error::Other(format!(
-                "{} comes from a template ({}), which cannot be captured.\n\
-                 \nRendering is not reversible: writing the live file back would\n\
-                 replace the template expressions with whatever they evaluated to,\n\
-                 and the template would be gone. Edit it in the layer instead.",
-                decl.path,
-                p.display()
-            )))
-        }
-        crate::config::Source::From(p) => p.clone(),
-        crate::config::Source::Text(_) => {
-            return Err(Error::Other(format!(
-                "{} is declared as an inline `text` block, which cannot be captured.\n\
-                 \nRendering is not reversible: there is no way to tell which part of the\n\
-                 file came from a template expression. Edit it in the layer instead:\n\
-                 \n  {}",
-                decl.path, decl.origin
-            )))
-        }
-    };
-
-    let after = std::fs::read_to_string(live).map_err(|source| Error::Io {
-        path: live.to_path_buf(),
-        source,
-    })?;
-    let before = std::fs::read_to_string(&source).unwrap_or_default();
-
-    if !dry {
-        std::fs::write(&source, &after).map_err(|e| Error::Io {
-            path: source.clone(),
-            source: e,
-        })?;
-    }
-    Ok(Edit {
-        file: source,
-        before,
-        after,
-    })
 }
