@@ -23,7 +23,9 @@ jobs:
       # hand-wrote, so calling it would be data loss, not a style choice.
       - name: autoformat must never be called
         run: |
-          if grep -rn 'autoformat' src/; then
+          # The call, not the word: capture.rs explains at length why it is
+          # banned, and the explanation must not trip its own guard.
+          if grep -rn '\.autoformat(' src/; then
             echo "autoformat() is banned -- see src/capture.rs for why"
             exit 1
           fi
