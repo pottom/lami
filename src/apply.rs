@@ -37,6 +37,25 @@ pub fn require_root() -> Result<()> {
     Ok(())
 }
 
+/// Claim packages that are already here as somebody else's dependency.
+///
+/// `pacman -S --needed` will not do this: it sees the package installed, says
+/// "up to date -- skipping", and leaves the install reason alone. The package
+/// would then still be missing from `-Qqe`, so the next `diff` would report
+/// the very same change -- apply would not be idempotent.
+fn adopt_packages(names: &[String]) -> Result<()> {
+    if names.is_empty() {
+        return Ok(());
+    }
+    println!(
+        "  pacman -D --asexplicit  ({} package(s) already present as dependencies)",
+        names.len()
+    );
+    run(Command::new("pacman")
+        .args(["-D", "--asexplicit"])
+        .args(names.iter().map(|s| s.as_str())))
+}
+
 /// Install missing packages.
 ///
 /// If everything is available from a repository, plain pacman does the job as
@@ -147,9 +166,18 @@ pub fn run_apply(
             _ => None,
         })
         .collect();
-    if !missing.is_empty() {
+    let adopt: Vec<String> = report
+        .changes
+        .iter()
+        .filter_map(|c| match c {
+            Change::AdoptPackage { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    if !missing.is_empty() || !adopt.is_empty() {
         println!("{}", crate::color::bold("packages:"));
         install(&missing, actor)?;
+        adopt_packages(&adopt)?;
     }
 
     // --- files ------------------------------------------------------------

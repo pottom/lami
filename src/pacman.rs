@@ -73,6 +73,19 @@ pub fn explicit_packages() -> Result<BTreeSet<String>> {
         .collect())
 }
 
+/// Every package on the machine, explicit or pulled in as a dependency.
+///
+/// The difference from `explicit_packages` is what tells a package that has to
+/// be built and downloaded apart from one that is already here and only needs
+/// its install reason corrected.
+pub fn installed_packages() -> Result<BTreeSet<String>> {
+    Ok(run("pacman", &["-Qq"])?
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
+}
+
 /// The installed AUR helper, if any.
 pub fn aur_helper() -> Option<&'static str> {
     AUR_HELPERS.iter().copied().find(|h| which(h).is_some())

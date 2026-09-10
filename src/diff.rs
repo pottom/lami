@@ -11,8 +11,10 @@ use crate::{pacman, perms, render};
 /// One difference between what is declared and what the machine has.
 #[derive(Debug)]
 pub enum Change {
-    /// Declared, but not installed as an explicit package.
+    /// Declared, but not installed at all.
     InstallPackage { name: String, layer: String },
+    /// Declared, present, but only as somebody else's dependency.
+    AdoptPackage { name: String, layer: String },
     /// A unit is not in the state the config asks for.
     SetUnitState {
         unit: String,
@@ -52,7 +54,7 @@ impl Change {
     /// Which section this belongs under.
     pub fn kind(&self) -> &'static str {
         match self {
-            Change::InstallPackage { .. } => "packages",
+            Change::InstallPackage { .. } | Change::AdoptPackage { .. } => "packages",
             Change::SetUnitState { .. }
             | Change::DaemonReload { .. }
             | Change::RestartUnit { .. } => "services",
@@ -69,6 +71,7 @@ impl Change {
     pub fn verb(&self) -> &'static str {
         match self {
             Change::InstallPackage { .. } => "install",
+            Change::AdoptPackage { .. } => "adopt",
             Change::SetUnitState { want, .. } => match want {
                 crate::config::UnitState::Enabled => "enable",
                 crate::config::UnitState::Disabled => "disable",
@@ -86,7 +89,7 @@ impl Change {
     /// What the change acts on.
     pub fn subject(&self) -> String {
         match self {
-            Change::InstallPackage { name, .. } => name.clone(),
+            Change::InstallPackage { name, .. } | Change::AdoptPackage { name, .. } => name.clone(),
             Change::SetUnitState { unit, .. } | Change::RestartUnit { unit, .. } => unit.clone(),
             Change::DaemonReload { scope } => match scope {
                 crate::config::Scope::System => "systemd".into(),
@@ -102,6 +105,9 @@ impl Change {
     /// Why this counts as a change: the machine's current state, in words.
     pub fn reason(&self) -> String {
         match self {
+            Change::AdoptPackage { layer, .. } => {
+                format!("declared in {layer}, installed only as a dependency")
+            }
             Change::InstallPackage { layer, .. } => {
                 format!("declared in {layer}, not installed")
             }
@@ -131,7 +137,9 @@ impl Change {
     fn paint(&self, s: &str) -> String {
         use crate::color::{action, added, changed};
         match self {
-            Change::InstallPackage { .. } | Change::CreateFile { .. } => added(s),
+            Change::InstallPackage { .. }
+            | Change::AdoptPackage { .. }
+            | Change::CreateFile { .. } => added(s),
             Change::SetUnitState { want, .. } => match want {
                 crate::config::UnitState::Enabled => added(s),
                 _ => changed(s),
@@ -233,11 +241,23 @@ pub fn compute(
     // --- packages ---------------------------------------------------------
     if pacman::available() {
         let explicit = pacman::explicit_packages()?;
+        let installed = pacman::installed_packages()?;
         let mut declared = std::collections::BTreeSet::new();
 
         for (layer, d) in r.packages() {
             declared.insert(d.name.clone());
-            if !explicit.contains(&d.name) {
+            if explicit.contains(&d.name) {
+                continue;
+            }
+            // Present, but only because something else asked for it: an
+            // orphan sweep would take it away. Nothing to download -- it just
+            // has to be claimed.
+            if installed.contains(&d.name) {
+                changes.push(Change::AdoptPackage {
+                    name: d.name.clone(),
+                    layer: layer.name.clone(),
+                });
+            } else {
                 changes.push(Change::InstallPackage {
                     name: d.name.clone(),
                     layer: layer.name.clone(),
@@ -378,4 +398,39 @@ pub fn compute(
         undeclared_packages,
         skipped,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adopting_and_installing_read_differently() {
+        // The distinction is not cosmetic: `pacman -S --needed` cannot claim a
+        // package that is already present as a dependency, so the two cases
+        // are carried out by different commands. The diff has to say which.
+        let install = Change::InstallPackage {
+            name: "openssh".into(),
+            layer: "core".into(),
+        };
+        let adopt = Change::AdoptPackage {
+            name: "openssh".into(),
+            layer: "core".into(),
+        };
+
+        assert_eq!(install.verb(), "install");
+        assert_eq!(adopt.verb(), "adopt");
+        assert_eq!(install.subject(), adopt.subject());
+        assert_eq!(install.kind(), adopt.kind());
+        assert!(
+            adopt.reason().contains("only as a dependency"),
+            "{}",
+            adopt.reason()
+        );
+        assert!(
+            install.reason().contains("not installed"),
+            "{}",
+            install.reason()
+        );
+    }
 }
