@@ -45,6 +45,16 @@ pub enum Command {
     /// AUR helper needed. Changes nothing.
     Check,
 
+    /// Show what differs between the config and this machine.
+    ///
+    /// Nothing is changed. This is the gate before `apply`: its output has to
+    /// line up with what your existing tooling reports.
+    Diff {
+        /// Also list explicitly installed packages that no layer declares.
+        #[arg(long)]
+        undeclared: bool,
+    },
+
     /// Render managed files without installing them.
     ///
     /// With no arguments, every file this host would get is printed with a

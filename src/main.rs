@@ -2,9 +2,11 @@
 
 mod cli;
 mod config;
+mod diff;
 mod error;
 mod pacman;
 mod render;
+mod systemd;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -82,6 +84,9 @@ fn main() -> Result<()> {
         Command::Show => cmd_show(&cfg, cli.host.unwrap_or_else(hostname))?,
         Command::Why { target } => cmd_why(&cfg, cli.host.unwrap_or_else(hostname), &target)?,
         Command::Check => cmd_check(&cfg, cli.host.unwrap_or_else(hostname))?,
+        Command::Diff { undeclared } => {
+            cmd_diff(&cfg, cli.host.unwrap_or_else(hostname), undeclared)?
+        }
         Command::Render { target, out, list } => cmd_render(
             &cfg,
             cli.host.unwrap_or_else(hostname),
@@ -317,6 +322,48 @@ fn cmd_render(
                 }
                 println!();
             }
+        }
+    }
+    Ok(())
+}
+
+/// Show what differs between the config and this machine.
+fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Error> {
+    let r = cfg.resolve(&host)?;
+    let home = real_home()?;
+    let report = diff::compute(&r, &home)?;
+
+    println!("host: {}\n", r.host.name);
+
+    if report.changes.is_empty() {
+        println!("Nothing to do -- the machine matches the config.");
+    } else {
+        for c in &report.changes {
+            println!("  {}", c.line());
+        }
+        println!("\n{} change(s). Nothing has been applied.", report.changes.len());
+    }
+
+    if !report.skipped.is_empty() {
+        println!("\nnot compared:");
+        for s in &report.skipped {
+            println!("  {s}");
+        }
+    }
+
+    if show_undeclared {
+        println!("\nexplicitly installed but declared by no layer:");
+        if report.undeclared_packages.is_empty() {
+            println!("  (none)");
+        } else {
+            for p in &report.undeclared_packages {
+                println!("  {p}");
+            }
+            println!(
+                "\n{} package(s). `apply` never removes these -- that is what\n\
+                 `prune` is for, and `capture` will offer to file them into a layer.",
+                report.undeclared_packages.len()
+            );
         }
     }
     Ok(())

@@ -4,7 +4,8 @@ Layered, declarative system configuration for Arch Linux — packages, `/etc`,
 systemd units and dotfiles through **one** tool and **one** config.
 
 > **Status: early development.** Only read-only commands work today
-> (`list`, `show`, `why`, `check`). Nothing is written to your system.
+> (`list`, `show`, `why`, `check`, `render`, `diff`). Nothing is written to
+> your system.
 
 ## Why
 
@@ -121,6 +122,30 @@ nvidia-open  (package)
   applies:    layer 'gui' is in sam's layers list
   condition:  gpu=nvidia (this host: gpu = nvidia)
 ```
+
+## Diffing
+
+`lami diff` compares the declared state against the machine and changes
+nothing:
+
+```
+$ lami diff
+host: frodo
+
+  ~ file     /etc/pacman.conf  [core]
+  + package  ripgrep  [tools]
+  + service  greetd.service  [gui]  (now: disabled)
+
+3 change(s). Nothing has been applied.
+```
+
+`--undeclared` additionally lists explicitly installed packages that no layer
+declares. `apply` never removes those — that is what `prune` is for, and
+`capture` will offer to file them into a layer.
+
+Packages are compared against `pacman -Qqe`, not `pacman -Qq`, on purpose: a
+package present only as a dependency counts as missing, because an orphan sweep
+will take it away as soon as whatever pulled it in disappears.
 
 ## Checking
 
