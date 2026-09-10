@@ -96,3 +96,34 @@ fn an_unmanaged_path_is_an_error() {
     assert!(!ok, "must exit with an error:\n{out}");
     assert!(out.contains("--list"), "should point at how to see the paths:\n{out}");
 }
+
+#[test]
+fn trailing_blank_lines_are_preserved() {
+    // Only a MISSING newline is added; existing ones are never removed.
+    // /etc/conf.d/snapper as shipped by the snapper package ends with a blank
+    // line, and an earlier version of this normalisation silently ate it --
+    // which would rewrite the user's file to satisfy our own tidiness.
+    let dir = std::env::temp_dir().join(format!("lami-nl-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(dir.join("hosts")).unwrap();
+    std::fs::create_dir_all(dir.join("layers/only/files")).unwrap();
+
+    std::fs::write(dir.join("layers/only/files/keep"), "line\n\n").unwrap();
+    std::fs::write(dir.join("hosts/h.kdl"), "description \"x\"\nlayers \"only\"\n").unwrap();
+    std::fs::write(
+        dir.join("layers/only/layer.kdl"),
+        "description \"x\"\nfile \"/tmp/lami-nl-target\" from=\"files/keep\"\n",
+    )
+    .unwrap();
+
+    let exe = env!("CARGO_BIN_EXE_lami");
+    let out = std::process::Command::new(exe)
+        .args(["--config-dir", dir.to_str().unwrap()])
+        .args(["--host", "h", "render", "/tmp/lami-nl-target"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(text, "line\n\n", "the blank line must survive: {text:?}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}

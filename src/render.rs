@@ -50,7 +50,13 @@ pub fn file(r: &Resolved<'_>, layer: &Layer, decl: &FileDecl) -> Result<String> 
         })?,
     };
 
-    let env = Environment::new();
+    let mut env = Environment::new();
+
+    // Jinja strips one trailing newline by default -- a convention that makes
+    // sense for HTML, and quietly corrupts config files. Without this, a file
+    // ending in a blank line loses it on every render.
+    env.set_keep_trailing_newline(true);
+
     let name = decl.path.clone();
     let rendered = env
         .render_named_str(&name, &raw, context(r, layer))
@@ -66,18 +72,21 @@ pub fn file(r: &Resolved<'_>, layer: &Layer, decl: &FileDecl) -> Result<String> 
     Ok(with_trailing_newline(rendered))
 }
 
-/// Config files end with a newline.
+/// Ensure the content ends with a newline -- and only that.
 ///
 /// KDL's multi-line strings dedent and strip the final newline, and a
 /// single-line `text "{{ hostname }}"` never had one. Writing /etc/hostname
 /// without a trailing newline would differ from what every other tool
-/// produces, and would show up as a spurious diff forever.
+/// produces and show up as a spurious diff forever.
+///
+/// Crucially this only ADDS; it never removes. An earlier version collapsed
+/// every trailing newline into one, which silently rewrote any file that
+/// legitimately ends with a blank line -- /etc/conf.d/snapper as shipped by
+/// the snapper package does exactly that. Mutating a user's file to satisfy
+/// our own tidiness is not the tool's business.
 fn with_trailing_newline(mut s: String) -> String {
-    if s.is_empty() {
+    if s.is_empty() || s.ends_with('\n') {
         return s;
-    }
-    while s.ends_with('\n') {
-        s.pop();
     }
     s.push('\n');
     s
