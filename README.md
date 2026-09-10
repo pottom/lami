@@ -89,6 +89,45 @@ KDL's triple-quoted strings dedent automatically, so the indentation that keeps
 the config readable never reaches the rendered file. Rendered files always end
 with a newline.
 
+### Permissions
+
+Ownership and mode are inferred from the path, so only the exceptions are
+written down:
+
+| Path | Default |
+|---|---|
+| `/etc/sudoers.d/**` | `root:root 0440` — sudo silently ignores anything else |
+| `/usr/local/bin/**`, `/usr/local/sbin/**` | `root:root 0755` |
+| anything else under `/` | `root:root 0644` |
+| `~/.ssh/**`, `~/.gnupg/**` | user, `0600` |
+| `~/.local/bin/**` | user, `0755` — scripts on PATH are meant to run |
+| anything else under `~` | user, `0644` |
+
+The rules are deliberately few; inference you cannot recite from memory is
+worse than none, because you end up looking it up anyway. When a path rule
+cannot guess, say so outright:
+
+```kdl
+file "/etc/snapper/configs/root" from="files/snapper-root" mode="0640"
+```
+
+Modes are written as **strings**: a bare `0640` would be read as decimal.
+
+`lami why` always prints which rule applied, so it never has to be guessed.
+
+### Hooks
+
+Some files are not enough on their own — the initramfs has to be regenerated
+after its config changes:
+
+```kdl
+on-change "/etc/mkinitcpio.conf" {
+    run "mkinitcpio -P"
+}
+```
+
+A hook only runs when one of the files it watches actually changes.
+
 Use `cpu_threads`, not `cpu-threads`: parameter names reach templates verbatim,
 and a hyphen would be read as subtraction.
 

@@ -6,7 +6,7 @@
 use crate::config::Resolved;
 use crate::error::Result;
 use crate::systemd::{self, State};
-use crate::{pacman, render};
+use crate::{pacman, perms, render};
 
 /// One difference between what is declared and what the machine has.
 #[derive(Debug)]
@@ -21,8 +21,17 @@ pub enum Change {
     },
     /// Declared, but the file is missing.
     CreateFile { path: String, layer: String },
-    /// Declared, and the file on disk differs.
+    /// Declared, and the file on disk differs in content.
     UpdateFile { path: String, layer: String },
+    /// Content matches, but ownership or mode does not.
+    FixPermissions {
+        path: String,
+        layer: String,
+        want: String,
+        have: String,
+    },
+    /// A watched file will change, so this command has to run afterwards.
+    RunHook { run: String, layer: String, because: String },
 }
 
 impl Change {
@@ -36,6 +45,17 @@ impl Change {
             } => format!("+ service  {unit}  [{layer}]  (now: {current})"),
             Change::CreateFile { path, layer } => format!("+ file     {path}  [{layer}]"),
             Change::UpdateFile { path, layer } => format!("~ file     {path}  [{layer}]"),
+            Change::FixPermissions {
+                path,
+                layer,
+                want,
+                have,
+            } => format!("~ perms    {path}  [{layer}]  {have} -> {want}"),
+            Change::RunHook {
+                run,
+                layer,
+                because,
+            } => format!("> run      {run}  [{layer}]  (because {because} changes)"),
         }
     }
 }
@@ -48,7 +68,38 @@ pub struct Report {
     pub skipped: Vec<String>,
 }
 
-pub fn compute(r: &Resolved<'_>, home: &std::path::Path) -> Result<Report> {
+/// Compare a file's actual ownership and mode against what is wanted.
+fn permission_change(
+    f: &crate::config::FileDecl,
+    target: &std::path::Path,
+    user: &str,
+    layer: &str,
+) -> Option<Change> {
+    use std::os::unix::fs::MetadataExt;
+
+    let want = perms::with_overrides(
+        perms::infer(&f.path, user),
+        f.owner.as_deref(),
+        f.group.as_deref(),
+        f.mode,
+    );
+    let md = std::fs::metadata(target).ok()?;
+    let have_mode = md.mode() & 0o7777;
+
+    // Only the mode is compared for now: resolving uid/gid to names needs
+    // passwd lookups that are not worth it before `apply` exists.
+    if have_mode == want.mode {
+        return None;
+    }
+    Some(Change::FixPermissions {
+        path: f.path.clone(),
+        layer: layer.to_string(),
+        want: format!("{:o}", want.mode),
+        have: format!("{have_mode:o}"),
+    })
+}
+
+pub fn compute(r: &Resolved<'_>, home: &std::path::Path, user: &str) -> Result<Report> {
     let mut changes = Vec::new();
     let mut undeclared_packages = Vec::new();
     let mut skipped = Vec::new();
@@ -90,16 +141,27 @@ pub fn compute(r: &Resolved<'_>, home: &std::path::Path) -> Result<Report> {
     }
 
     // --- files ------------------------------------------------------------
+    let mut touched: Vec<String> = Vec::new();
+
     for (layer, f) in r.files() {
         let want = render::file(r, layer, f)?;
         let target = render::target_path(f, home);
         match std::fs::read_to_string(&target) {
-            Ok(have) if have == want => {}
-            Ok(_) => changes.push(Change::UpdateFile {
-                path: f.path.clone(),
-                layer: layer.name.clone(),
-            }),
+            Ok(have) if have == want => {
+                // Content is right; ownership and mode may still not be.
+                if let Some(c) = permission_change(f, &target, user, &layer.name) {
+                    changes.push(c);
+                }
+            }
+            Ok(_) => {
+                touched.push(f.path.clone());
+                changes.push(Change::UpdateFile {
+                    path: f.path.clone(),
+                    layer: layer.name.clone(),
+                })
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                touched.push(f.path.clone());
                 changes.push(Change::CreateFile {
                     path: f.path.clone(),
                     layer: layer.name.clone(),
@@ -111,10 +173,27 @@ pub fn compute(r: &Resolved<'_>, home: &std::path::Path) -> Result<Report> {
                 // rather than pretending it matches.
                 skipped.push(format!("{} (not readable as this user)", f.path));
             }
-            Err(_) => changes.push(Change::UpdateFile {
-                path: f.path.clone(),
+            Err(_) => {
+                touched.push(f.path.clone());
+                changes.push(Change::UpdateFile {
+                    path: f.path.clone(),
+                    layer: layer.name.clone(),
+                })
+            }
+        }
+    }
+
+    // --- hooks ------------------------------------------------------------
+    // A hook is only worth running if one of the files it watches is actually
+    // going to change. Running mkinitcpio -P on every apply would work, but it
+    // takes a minute and would hide what actually happened.
+    for (layer, h) in r.hooks() {
+        if let Some(w) = h.watch.iter().find(|w| touched.contains(w)) {
+            changes.push(Change::RunHook {
+                run: h.run.clone(),
                 layer: layer.name.clone(),
-            }),
+                because: w.clone(),
+            });
         }
     }
 

@@ -132,6 +132,20 @@ pub struct FileDecl {
     /// Absolute target path, or `~/...` for the user's home.
     pub path: String,
     pub source: Source,
+    /// Explicit overrides. Left unset, ownership and mode are inferred from
+    /// the path -- see the `perms` module.
+    pub owner: Option<String>,
+    pub group: Option<String>,
+    pub mode: Option<u32>,
+    pub origin: Origin,
+    pub condition: Option<Condition>,
+}
+
+/// A command to run when one of the watched paths changes.
+#[derive(Debug, Clone)]
+pub struct Hook {
+    pub watch: Vec<String>,
+    pub run: String,
     pub origin: Origin,
     pub condition: Option<Condition>,
 }
@@ -144,6 +158,7 @@ pub struct Layer {
     pub packages: Vec<Decl>,
     pub services: Vec<Decl>,
     pub files: Vec<FileDecl>,
+    pub hooks: Vec<Hook>,
     /// The layer's own directory, which `from=` paths are relative to.
     pub dir: PathBuf,
     pub path: PathBuf,
@@ -306,6 +321,7 @@ impl Layer {
             packages: Vec::new(),
             services: Vec::new(),
             files: Vec::new(),
+            hooks: Vec::new(),
             dir: path.parent().unwrap_or(Path::new(".")).to_path_buf(),
             path: path.to_path_buf(),
         };
@@ -373,7 +389,45 @@ fn collect(
                 let decl = parse_file(node, src, path, cond.as_ref(), &layer.dir)?;
                 layer.files.push(decl);
             }
-            _ => { /* on-change: next milestone */ }
+            "on-change" => {
+                let watch = args(node);
+                let run = node
+                    .children()
+                    .and_then(|c| {
+                        c.nodes()
+                            .iter()
+                            .find(|n| n.name().value() == "run")
+                            .and_then(|n| match n.entries().first().map(|e| e.value()) {
+                                Some(KdlValue::String(s)) => Some(s.clone()),
+                                _ => None,
+                            })
+                    })
+                    .ok_or_else(|| Error::Config {
+                        msg: "`on-change` needs a `run` command".into(),
+                        src: named(path, src),
+                        span: (node.span().offset(), node.span().len()).into(),
+                        label: "e.g. `on-change \"/etc/mkinitcpio.conf\" { run \"mkinitcpio -P\" }`"
+                            .into(),
+                    })?;
+                if watch.is_empty() {
+                    return Err(Error::Config {
+                        msg: "`on-change` needs at least one path to watch".into(),
+                        src: named(path, src),
+                        span: (node.span().offset(), node.span().len()).into(),
+                        label: "which file should trigger this?".into(),
+                    });
+                }
+                layer.hooks.push(Hook {
+                    watch,
+                    run,
+                    origin: Origin {
+                        file: path.to_path_buf(),
+                        line: line_of(src, node.span().offset()),
+                    },
+                    condition: cond.clone(),
+                });
+            }
+            _ => {}
         }
     }
     Ok(())
@@ -536,6 +590,19 @@ impl Resolved<'_> {
         out
     }
 
+    /// The hooks that apply to this host.
+    pub fn hooks(&self) -> Vec<(&Layer, &Hook)> {
+        let mut out = Vec::new();
+        for layer in &self.layers {
+            for h in &layer.hooks {
+                if self.matches(&h.condition) {
+                    out.push((*layer, h));
+                }
+            }
+        }
+        out
+    }
+
     /// The packages that actually apply to this host, in layer order.
     pub fn packages(&self) -> Vec<(&Layer, &Decl)> {
         self.select(|l| &l.packages)
@@ -578,14 +645,34 @@ fn parse_file(
         label: "e.g. `file \"/etc/foo.conf\" from=\"foo.conf\"`".into(),
     })?;
 
-    let from = node
-        .entries()
-        .iter()
-        .find(|e| e.name().is_some_and(|n| n.value() == "from"))
-        .and_then(|e| match e.value() {
-            KdlValue::String(s) => Some(s.clone()),
-            _ => None,
-        });
+    let prop = |key: &str| -> Option<String> {
+        node.entries()
+            .iter()
+            .find(|e| e.name().is_some_and(|n| n.value() == key))
+            .and_then(|e| match e.value() {
+                KdlValue::String(s) => Some(s.clone()),
+                other => Some(other.to_string()),
+            })
+    };
+
+    let from = prop("from");
+    let owner = prop("owner");
+    let group = prop("group");
+
+    // Modes are written as strings so the leading zero survives: mode="0640".
+    // A bare 0640 would be read as decimal by KDL and silently mean something
+    // else entirely.
+    let mode = match prop("mode") {
+        None => None,
+        Some(m) => Some(u32::from_str_radix(m.trim_start_matches("0o"), 8).map_err(|_| {
+            Error::Config {
+                msg: format!("`{m}` is not a valid octal mode"),
+                src: named(path, src),
+                span: span.into(),
+                label: "write it as a string, e.g. mode=\"0640\"".into(),
+            }
+        })?),
+    };
 
     let text = node.children().and_then(|c| {
         c.nodes()
@@ -621,6 +708,9 @@ fn parse_file(
     Ok(FileDecl {
         path: target,
         source,
+        owner,
+        group,
+        mode,
         origin: Origin {
             file: path.to_path_buf(),
             line: line_of(src, node.span().offset()),

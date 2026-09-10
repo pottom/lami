@@ -5,6 +5,7 @@ mod config;
 mod diff;
 mod error;
 mod pacman;
+mod perms;
 mod render;
 mod systemd;
 
@@ -56,6 +57,24 @@ fn real_home() -> Result<PathBuf, Error> {
         dir.to_str()
             .map_err(|_| Error::Other("home directory path is not valid UTF-8".into()))?,
     ))
+}
+
+/// The name of the user we are acting for.
+///
+/// Resolved through passwd, never from $USER: under sudo that would be the
+/// caller's name and everything written into a home directory would end up
+/// owned by root.
+fn real_user() -> Result<String, Error> {
+    let uid: u32 = std::env::var("SUDO_UID")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| unsafe { libc::getuid() });
+    let pw = unsafe { libc::getpwuid(uid) };
+    if pw.is_null() {
+        return Err(Error::Other(format!("no passwd entry for uid {uid}")));
+    }
+    let name = unsafe { std::ffi::CStr::from_ptr((*pw).pw_name) };
+    Ok(name.to_string_lossy().into_owned())
 }
 
 fn hostname() -> String {
@@ -179,6 +198,47 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
         }
     }
 
+    let user = real_user()?;
+    for (layer, f) in r.files() {
+        if f.path != target {
+            continue;
+        }
+        found = true;
+        let pm = perms::with_overrides(
+            perms::infer(&f.path, &user),
+            f.owner.as_deref(),
+            f.group.as_deref(),
+            f.mode,
+        );
+        println!("{}  (file)", f.path);
+        println!("  declared:   {}", f.origin);
+        println!("  applies:    layer '{}'", layer.name);
+        match &f.source {
+            crate::config::Source::From(p) => println!("  content:    {}", p.display()),
+            crate::config::Source::Text(_) => println!("  content:    inline in the layer"),
+        }
+        println!(
+            "  permissions: {:o} {}:{}  ({})",
+            pm.mode, pm.owner, pm.group, pm.reason
+        );
+        if let Some(c) = &f.condition {
+            println!("  condition:  {c}");
+        }
+        println!();
+    }
+
+    for (layer, h) in r.hooks() {
+        if !h.watch.iter().any(|w| w == target) {
+            continue;
+        }
+        found = true;
+        println!("{}  (watched by a hook)", target);
+        println!("  declared:   {}", h.origin);
+        println!("  applies:    layer '{}'", layer.name);
+        println!("  runs:       {}", h.run);
+        println!();
+    }
+
     if !found {
         println!("'{target}' is not declared for {}.", r.host.name);
         println!("\nCheck `lami show`, or it may only apply to another host.");
@@ -281,8 +341,18 @@ fn cmd_render(
     }
 
     if list_only {
+        let user = real_user()?;
         for (layer, f) in &files {
-            println!("{}\t{}\t{}", f.path, layer.name, f.origin);
+            let pm = perms::with_overrides(
+                perms::infer(&f.path, &user),
+                f.owner.as_deref(),
+                f.group.as_deref(),
+                f.mode,
+            );
+            println!(
+                "{:<44} {:o} {}:{}  [{}]  {}",
+                f.path, pm.mode, pm.owner, pm.group, layer.name, f.origin
+            );
         }
         return Ok(());
     }
@@ -331,7 +401,7 @@ fn cmd_render(
 fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
     let home = real_home()?;
-    let report = diff::compute(&r, &home)?;
+    let report = diff::compute(&r, &home, &real_user()?)?;
 
     println!("host: {}\n", r.host.name);
 

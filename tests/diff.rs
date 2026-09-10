@@ -142,3 +142,61 @@ fn undeclared_packages_exclude_the_declared_ones() {
         "a declared package leaked into the undeclared list:\n{text}"
     );
 }
+
+/// A fixture with a file plus a hook watching it.
+fn hook_fixture(tag: &str) -> (Fixture, PathBuf) {
+    let f = Fixture::new(tag);
+    let target = f.target.clone();
+    fs::write(
+        f.dir.join("layers/only/layer.kdl"),
+        format!(
+            "description \"fixture layer\"\n\n\
+             file \"{0}\" {{\n    text \"hello\"\n}}\n\n\
+             on-change \"{0}\" {{\n    run \"echo changed\"\n}}\n",
+            target.display()
+        ),
+    )
+    .unwrap();
+    (f, target)
+}
+
+#[test]
+fn a_hook_fires_only_when_its_file_changes() {
+    // Running every hook on every apply would work, but mkinitcpio -P takes a
+    // minute and would bury what actually happened.
+    let (f, target) = hook_fixture("hook-fires");
+    fs::write(&target, "something else\n").unwrap();
+
+    let (out, ok) = f.run(&["diff"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("> run"), "the hook should fire:\n{out}");
+    assert!(out.contains("because"), "it should say why:\n{out}");
+}
+
+#[test]
+fn a_hook_stays_quiet_when_nothing_changes() {
+    let (f, target) = hook_fixture("hook-quiet");
+    fs::write(&target, "hello\n").unwrap();
+
+    let (out, ok) = f.run(&["diff"]);
+    assert!(ok, "{out}");
+    assert!(
+        !out.contains("> run"),
+        "no file changed, so no hook should run:\n{out}"
+    );
+}
+
+#[test]
+fn a_wrong_mode_is_reported_even_when_content_matches() {
+    let f = Fixture::new("mode");
+    fs::write(&f.target, "hello\n").unwrap();
+
+    // Default for a path outside a home directory is 0644.
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&f.target, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let (out, ok) = f.run(&["diff"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("~ perms"), "{out}");
+    assert!(out.contains("600 -> 644"), "should say both modes:\n{out}");
+}

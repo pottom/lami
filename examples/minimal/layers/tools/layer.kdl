@@ -14,3 +14,12 @@ packages {
 services {
     bluetooth
 }
+
+// A script under ~/.local/bin is meant to be run, so it is made executable
+// without saying so.
+file "~/.local/bin/hello" {
+    text """
+    #!/usr/bin/env bash
+    echo "hello from {{ hostname }}"
+    """
+}

@@ -48,3 +48,21 @@ file "/etc/makepkg.conf.d/99-local.conf" {
 file "/etc/hostname" {
     text "{{ hostname }}"
 }
+
+// sudo silently ignores a drop-in whose mode is not exactly 0440 -- so lami
+// infers that from the path and you do not have to remember it.
+file "/etc/sudoers.d/10-wheel" {
+    text "%wheel ALL=(ALL:ALL) NOPASSWD: ALL"
+}
+
+// 0640 is not something any path rule could guess, so it is stated outright.
+// Modes are written as strings: a bare 0640 would be read as decimal.
+file "/etc/snapper/configs/root" from="files/snapper-root" mode="0640"
+
+file "/etc/mkinitcpio.conf" from="files/mkinitcpio.conf"
+
+// Changing the initramfs config is not enough on its own; it has to be
+// regenerated. mkinitcpio -P is idempotent, so re-running it is harmless.
+on-change "/etc/mkinitcpio.conf" {
+    run "mkinitcpio -P"
+}
