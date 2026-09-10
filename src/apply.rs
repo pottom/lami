@@ -174,11 +174,28 @@ pub fn run_apply(
             _ => None,
         })
         .collect();
-    if !missing.is_empty() || !adopt.is_empty() {
+    let package_changes = missing.len() + adopt.len();
+    if package_changes > 0 {
         println!("{}", crate::color::bold("packages:"));
         install(&missing, actor)?;
         adopt_packages(&adopt)?;
     }
+
+    // Everything from here on is measured against the machine as it is NOW.
+    //
+    // The first report was taken before those packages existed, and a unit
+    // that is not installed cannot be reported as disabled -- so on a fresh
+    // machine every service whose package this run just installed would have
+    // been left alone, and `apply` would have needed a second run to
+    // converge. The same goes for a file the new package brought with it.
+    //
+    // Found by installing this config into an empty VM: four services stayed
+    // disabled and the next `diff` asked for them again.
+    let report = if package_changes > 0 {
+        diff::compute(r, &actor.home, &actor.name, settings)?
+    } else {
+        report
+    };
 
     // --- files ------------------------------------------------------------
     let files: Vec<&Change> = report
@@ -293,7 +310,7 @@ pub fn run_apply(
     }
 
     record_state(r, actor)?;
-    Ok(report.changes.len())
+    Ok(package_changes + report.changes.len())
 }
 
 /// Remember what is managed now, so that a later `prune` can tell "no longer
