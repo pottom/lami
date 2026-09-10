@@ -40,4 +40,8 @@ pub enum Command {
 
     /// Az ismert gépek és rétegek listája.
     List,
+
+    /// A config ellenőrzése a rendszer ellen: van-e minden csomag, kell-e
+    /// AUR helper. Semmit nem módosít.
+    Check,
 }

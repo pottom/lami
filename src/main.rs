@@ -3,6 +3,7 @@
 mod cli;
 mod config;
 mod error;
+mod pacman;
 
 use std::path::PathBuf;
 
@@ -76,6 +77,7 @@ fn main() -> Result<()> {
         Command::List => cmd_list(&cfg),
         Command::Show => cmd_show(&cfg, cli.host.unwrap_or_else(hostname))?,
         Command::Why { target } => cmd_why(&cfg, cli.host.unwrap_or_else(hostname), &target)?,
+        Command::Check => cmd_check(&cfg, cli.host.unwrap_or_else(hostname))?,
     }
     Ok(())
 }
@@ -164,6 +166,66 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
     if !found {
         println!("'{target}' nincs deklarálva {} számára.", r.host.name);
         println!("\nEllenőrizd a `lami show` kimenetét, vagy lehet, hogy más gép kapja csak.");
+    }
+    Ok(())
+}
+
+/// A config ellenőrzése a rendszer ellen.
+///
+/// Ez pótolja azt, amit a külön `aur` blokk megszűnésével elvesztettünk: mivel
+/// a config nem mondja meg, mi jön az AUR-ból, ELLENŐRIZNI kell, hogy van-e
+/// AUR helper -- különben az apply csak a telepítésnél derítené ki.
+fn cmd_check(cfg: &Config, host: String) -> Result<(), Error> {
+    let r = cfg.resolve(&host)?;
+    println!("gép: {}\n", r.host.name);
+
+    if !pacman::available() {
+        println!("A pacman nem elérhető, a csomagellenőrzés kimarad.");
+        println!("(A lami Arch Linuxra készült; a config szerkezete így is ellenőrizve.)");
+        return Ok(());
+    }
+
+    let declared: Vec<&str> = r.packages().iter().map(|(_, d)| d.name.as_str()).collect();
+    let sync = pacman::sync_packages()?;
+
+    let (from_repo, unknown): (Vec<&str>, Vec<&str>) =
+        declared.iter().partition(|p| sync.contains(**p));
+
+    println!("csomagok:");
+    println!("  repóból      {}", from_repo.len());
+    println!("  nem a repóból {}", unknown.len());
+
+    if unknown.is_empty() {
+        println!("\n✓ minden csomag elérhető a beállított repókból.");
+        return Ok(());
+    }
+
+    println!();
+    match pacman::aur_helper() {
+        Some(helper) => {
+            println!("Ezeket a(z) '{helper}' hozza az AUR-ból:");
+            for p in &unknown {
+                println!("  {p}");
+            }
+            println!(
+                "\nMegjegyzés: ami elgépelés, az is ide kerül -- a lami nem kérdezi le\n\
+                 az AUR-t hálózat nélkül. A telepítéskor a(z) {helper} fog szólni."
+            );
+        }
+        None => {
+            let list = unknown.join(", ");
+            return Err(Error::Other(format!(
+                "{} csomag nem érhető el a beállított repókból, és NINCS AUR helper telepítve:\n\
+                 \n  {}\n\
+                 \nHa AUR-os csomagok: telepíts egy helpert (paru, yay, pikaur, aura).\n\
+                 A forrásból épített paru ajánlott -- a paru-bin a pacman ABI-váltásakor\n\
+                 használhatatlanná válik, épp amikor javítanál vele:\n\
+                 \n  git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si\n\
+                 \nHa elgépelés: javítsd a rétegfájlban. A `lami why <nev>` megmondja, hol van.",
+                unknown.len(),
+                list
+            )));
+        }
     }
     Ok(())
 }

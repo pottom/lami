@@ -46,6 +46,22 @@ when gpu="nvidia" {
 vannak, és a lami a pacman sync adatbázisából tudja, mi jön honnan — a config
 írásakor ezt nem kell fejben tartanod.
 
+Cserébe a lami **ellenőrzi**, hogy van-e AUR helper, ha kell:
+
+```
+$ lami check
+csomagok:
+  repóból      29
+  nem a repóból 3
+
+Ezeket a(z) 'paru' hozza az AUR-ból:
+  caelestia-shell
+  ...
+```
+
+AUR helper nélkül ez hibával áll meg, mielőtt bármi telepítés indulna — és
+megmondja, hogyan javítsd.
+
 Egy gép azt mondja meg, mely rétegeket kapja és milyen paraméterekkel:
 
 ```kdl
@@ -83,6 +99,7 @@ nvidia-open  (csomag)
 ```sh
 cargo build
 ./target/debug/lami --config-dir examples/minimal list
+./target/debug/lami --config-dir examples/minimal --host frodo check
 ./target/debug/lami --config-dir examples/minimal --host frodo show
 ./target/debug/lami --config-dir examples/minimal --host sam why nvidia-open
 ```
