@@ -275,7 +275,11 @@ fn record_state(r: &Resolved<'_>, actor: &Actor) -> Result<()> {
         st.packages.insert(d.name.clone());
     }
     for (_, d) in r.services() {
-        st.services.insert(systemd::qualify(&d.name));
+        let unit = systemd::qualify(&d.name);
+        match d.scope {
+            crate::config::Scope::User => st.user_services.insert(unit),
+            crate::config::Scope::System => st.services.insert(unit),
+        };
     }
     for (_, f) in r.files() {
         st.files
@@ -294,15 +298,19 @@ fn _unused(_: &Path) {
 pub struct Stale {
     pub packages: Vec<String>,
     pub services: Vec<String>,
+    pub user_services: Vec<String>,
     pub files: Vec<String>,
 }
 
 impl Stale {
     pub fn is_empty(&self) -> bool {
-        self.packages.is_empty() && self.services.is_empty() && self.files.is_empty()
+        self.packages.is_empty()
+            && self.services.is_empty()
+            && self.user_services.is_empty()
+            && self.files.is_empty()
     }
     pub fn len(&self) -> usize {
-        self.packages.len() + self.services.len() + self.files.len()
+        self.packages.len() + self.services.len() + self.user_services.len() + self.files.len()
     }
 }
 
@@ -316,11 +324,15 @@ pub fn stale(r: &Resolved<'_>, actor: &Actor) -> Stale {
 
     let now_pkgs: std::collections::BTreeSet<String> =
         r.packages().iter().map(|(_, d)| d.name.clone()).collect();
-    let now_svcs: std::collections::BTreeSet<String> = r
-        .services()
-        .iter()
-        .map(|(_, d)| systemd::qualify(&d.name))
-        .collect();
+    let mut now_svcs = std::collections::BTreeSet::new();
+    let mut now_user_svcs = std::collections::BTreeSet::new();
+    for (_, d) in r.services() {
+        let unit = systemd::qualify(&d.name);
+        match d.scope {
+            crate::config::Scope::User => now_user_svcs.insert(unit),
+            crate::config::Scope::System => now_svcs.insert(unit),
+        };
+    }
     let now_files: std::collections::BTreeSet<String> = r
         .files()
         .iter()
@@ -330,11 +342,16 @@ pub fn stale(r: &Resolved<'_>, actor: &Actor) -> Stale {
     Stale {
         packages: prev.packages.difference(&now_pkgs).cloned().collect(),
         services: prev.services.difference(&now_svcs).cloned().collect(),
+        user_services: prev
+            .user_services
+            .difference(&now_user_svcs)
+            .cloned()
+            .collect(),
         files: prev.files.difference(&now_files).cloned().collect(),
     }
 }
 
-pub fn run_prune(s: &Stale) -> Result<()> {
+pub fn run_prune(s: &Stale, actor: &Actor) -> Result<()> {
     if !s.services.is_empty() {
         println!("{}", crate::color::bold("services:"));
         // Disabled, not stopped. Stopping a display manager out from under a

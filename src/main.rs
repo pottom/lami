@@ -678,6 +678,9 @@ fn cmd_prune(
     for s in &stale.services {
         println!("  {} {s}", color::removed("- service"));
     }
+    for s in &stale.user_services {
+        println!("  {} {s}  {}", color::removed("- service"), color::dim("(user)"));
+    }
     for f in &stale.files {
         println!("  {} {f}", color::removed("- file   "));
     }
@@ -707,7 +710,7 @@ fn cmd_prune(
     }
 
     println!();
-    apply::run_prune(&stale)?;
+    apply::run_prune(&stale, &actor)?;
     println!("\nPruned {} item(s).", stale.len());
     Ok(())
 }

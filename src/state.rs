@@ -21,6 +21,10 @@ pub struct State {
     pub packages: BTreeSet<String>,
     pub files: BTreeSet<String>,
     pub services: BTreeSet<String>,
+    /// Kept apart from `services` because scope decides which systemctl gets
+    /// the command. Disabling a user unit in system scope silently does
+    /// nothing, which would make prune quietly ineffective.
+    pub user_services: BTreeSet<String>,
     pub host: String,
 }
 
@@ -39,11 +43,12 @@ fn encode(s: &State) -> String {
             .join(",\n")
     };
     format!(
-        "{{\n  \"host\": \"{}\",\n  \"packages\": [\n{}\n  ],\n  \"files\": [\n{}\n  ],\n  \"services\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"host\": \"{}\",\n  \"packages\": [\n{}\n  ],\n  \"files\": [\n{}\n  ],\n  \"services\": [\n{}\n  ],\n  \"user_services\": [\n{}\n  ]\n}}\n",
         s.host,
         arr(&s.packages),
         arr(&s.files),
-        arr(&s.services)
+        arr(&s.services),
+        arr(&s.user_services)
     )
 }
 
@@ -56,13 +61,22 @@ fn decode(text: &str) -> State {
             st.host = t.split('"').nth(3).unwrap_or("").to_string();
             continue;
         }
-        for (key, which) in [("packages", 0), ("files", 1), ("services", 2)] {
+        // user_services before services: the latter is a prefix of the
+        // former's key, so checking it first would swallow both.
+        for (key, which) in [
+            ("packages", 0),
+            ("files", 1),
+            ("user_services", 3),
+            ("services", 2),
+        ] {
             if t.starts_with(&format!("\"{key}\"")) {
                 section = Some(match which {
                     0 => &mut st.packages,
                     1 => &mut st.files,
-                    _ => &mut st.services,
+                    2 => &mut st.services,
+                    _ => &mut st.user_services,
                 });
+                break;
             }
         }
         if t.starts_with('"') && !t.contains(": ") {
@@ -112,12 +126,14 @@ mod tests {
         s.packages.insert("ghostty".into());
         s.files.insert("/etc/pacman.conf".into());
         s.services.insert("greetd.service".into());
+        s.user_services.insert("wireplumber.service".into());
 
         let back = decode(&encode(&s));
         assert_eq!(back.host, "frodo");
         assert_eq!(back.packages, s.packages);
         assert_eq!(back.files, s.files);
         assert_eq!(back.services, s.services);
+        assert_eq!(back.user_services, s.user_services);
     }
 
     #[test]
