@@ -317,6 +317,9 @@ without writing anything until you ask.
 ## Trying it out
 
 ```sh
+./install.sh            # build and install to /usr/local/bin
+
+# or without installing:
 cargo build
 ./target/debug/lami --config-dir examples/minimal list
 ./target/debug/lami --config-dir examples/minimal --host frodo show
