@@ -224,7 +224,10 @@ pub fn run_apply(
     let report = diff::compute(r, &actor.home, &actor.name, settings)?;
 
     if report.changes.is_empty() {
-        println!("Nothing to do -- the machine already matches the config.");
+        if report.problems.is_empty() {
+            println!("Nothing to do -- the machine already matches the config.");
+        }
+        diff::print_problems(&report.problems);
         // Still record what is managed. The state file describes what IS
         // declared, not what happened to change on this run -- otherwise a
         // no-op apply would leave prune with a stale picture.
@@ -351,6 +354,9 @@ pub fn run_apply(
 
     // --- hooks ------------------------------------------------------------
     run_hooks(&report, |_| true)?;
+
+    // Last, so it is the thing still on screen when apply finishes.
+    diff::print_problems(&report.problems);
 
     record_state(r, actor)?;
     Ok(early + package_changes + report.changes.len())

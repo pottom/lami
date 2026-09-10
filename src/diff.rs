@@ -165,6 +165,20 @@ impl Change {
 }
 
 /// Print a report grouped by kind, so like things line up together.
+/// Print what the config asks for and lami cannot carry out.
+///
+/// Not changes, because `apply` cannot fix them -- but reporting "nothing to
+/// do" while a declared service is not running would be worse than useless.
+pub fn print_problems(problems: &[String]) {
+    if problems.is_empty() {
+        return;
+    }
+    println!("\n{}", crate::color::removed("problems"));
+    for p in problems {
+        println!("  {p}");
+    }
+}
+
 pub fn print(changes: &[Change]) {
     // A minimum width so the reason column stays put even with a single short
     // entry -- otherwise the subject and its explanation run together and
@@ -195,6 +209,11 @@ pub struct Report {
     /// `apply`; this is what `capture` offers to file into a layer.
     pub undeclared_packages: Vec<String>,
     pub skipped: Vec<String>,
+    /// Things the config asks for that lami cannot do anything about, and
+    /// which would otherwise pass silently. A declared unit that does not
+    /// exist is the motivating case: `apply` cannot enable it, so it is not a
+    /// change, but reporting "nothing to do" would be a lie.
+    pub problems: Vec<String>,
 }
 
 /// Compare a file's actual ownership and mode against what is wanted.
@@ -237,6 +256,7 @@ pub fn compute(
     let mut changes: Vec<Change> = Vec::new();
     let mut undeclared_packages = Vec::new();
     let mut skipped = Vec::new();
+    let mut problems = Vec::new();
 
     // --- packages ---------------------------------------------------------
     if pacman::available() {
@@ -333,6 +353,17 @@ pub fn compute(
                     .iter()
                     .any(|p| systemd::unit_of_path(p).as_deref() == Some(unit.as_str()));
 
+            // Declared, absent, and nothing in this config will create it.
+            // Almost always a layer that enables a service without declaring
+            // the package that provides it.
+            if current == State::NotFound && !will_exist {
+                problems.push(format!(
+                    "{unit} ({}): no such unit on this machine. The layer asks for it \
+                     but nothing declares the package that provides it.",
+                    layer.name
+                ));
+            }
+
             if !matches_want && will_exist {
                 changes.push(Change::SetUnitState {
                     unit: unit.clone(),
@@ -397,6 +428,7 @@ pub fn compute(
         changes,
         undeclared_packages,
         skipped,
+        problems,
     })
 }
 

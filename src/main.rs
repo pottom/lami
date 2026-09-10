@@ -592,7 +592,11 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
     println!("{}\n", color::bold(&format!("host: {}", r.host.name)));
 
     if report.changes.is_empty() {
-        println!("Nothing to do -- the machine matches the config.");
+        if report.problems.is_empty() {
+            println!("Nothing to do -- the machine matches the config.");
+        } else {
+            println!("No changes to make -- but see below.");
+        }
     } else {
         diff::print(&report.changes);
         let n = report.changes.len();
@@ -604,6 +608,8 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
             ))
         );
     }
+
+    diff::print_problems(&report.problems);
 
     // Kept to one line. Silently claiming a match for something we could not
     // read would be dishonest, but four lines of it on every single run is

@@ -213,3 +213,19 @@ fn capture_dry_run_writes_nothing() {
 
     fs::remove_dir_all(&base).ok();
 }
+
+#[test]
+fn a_declared_unit_that_does_not_exist_is_reported() {
+    // A layer that enables a service without declaring the package providing
+    // it used to pass in silence: apply cannot enable a unit that is not
+    // there, so it was not a change, and diff said "nothing to do" while the
+    // service the config asked for was simply absent. Found on a fresh VM,
+    // where the gui layer enabled power-profiles-daemon and nothing installed
+    // it.
+    let f = Fixture::new("ghostunit", "services {\n    lami-no-such-unit-exists\n}\n");
+    let (out, ok) = f.run(&["diff", "--no-color"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("problems"), "{out}");
+    assert!(out.contains("lami-no-such-unit-exists.service"), "{out}");
+    assert!(!out.contains("Nothing to do"), "{out}");
+}
