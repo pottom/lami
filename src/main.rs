@@ -10,6 +10,7 @@ mod write;
 mod pacman;
 mod perms;
 mod render;
+mod state;
 mod systemd;
 
 use std::fs;
@@ -111,14 +112,23 @@ fn main() -> Result<()> {
         }
         Command::Capture {
             package,
+            file,
             layer,
             dry_run,
         } => cmd_capture(
             &cfg,
             cli.host.unwrap_or_else(hostname),
             package.as_deref(),
+            file.as_deref(),
             layer.as_deref(),
             dry_run,
+        )?,
+        Command::Prune { dry_run, force, yes } => cmd_prune(
+            &cfg,
+            cli.host.unwrap_or_else(hostname),
+            dry_run,
+            force,
+            yes,
         )?,
         Command::Diff { undeclared } => {
             cmd_diff(&cfg, cli.host.unwrap_or_else(hostname), undeclared)?
@@ -496,18 +506,66 @@ fn cmd_capture(
     cfg: &Config,
     host: String,
     package: Option<&str>,
+    file: Option<&str>,
     layer: Option<&str>,
     dry: bool,
 ) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
+
+    if let Some(path) = file {
+        let home = real_home()?;
+        let (_, decl) = r
+            .files()
+            .into_iter()
+            .find(|(_, f)| f.path == path)
+            .ok_or_else(|| {
+                Error::Other(format!(
+                    "'{path}' is not a file managed for {}.\n\
+                     Run `lami render --list` to see the managed paths.",
+                    r.host.name
+                ))
+            })?;
+        let live = render::target_path(decl, &home);
+        let edit = capture::capture_file(decl, &live, dry)?;
+        println!("{}  <-  {}", edit.file.display(), live.display());
+        println!("{}", edit.summary());
+        if dry {
+            println!("\n--dry-run: nothing was written.");
+        } else {
+            println!("\nWritten. Review with `git diff` before committing.");
+        }
+        return Ok(());
+    }
 
     let Some(package) = package else {
         // No target named: show what is on offer.
         let report = diff::compute(&r, &real_home()?, &real_user()?)?;
         println!("host: {}\n", r.host.name);
 
+        let changed: Vec<&diff::Change> = report
+            .changes
+            .iter()
+            .filter(|c| matches!(c, diff::Change::UpdateFile { .. }))
+            .collect();
+
+        if report.undeclared_packages.is_empty() && changed.is_empty() {
+            println!("Nothing to capture -- the machine matches the config.");
+            return Ok(());
+        }
+
+        if !changed.is_empty() {
+            println!("managed files that differ on this machine:");
+            for c in &changed {
+                if let diff::Change::UpdateFile { path, .. } = c {
+                    println!("  {path}");
+                }
+            }
+            println!("\nPull one back with:");
+            println!("  lami capture --file <path>");
+            println!();
+        }
+
         if report.undeclared_packages.is_empty() {
-            println!("Nothing to capture -- every explicitly installed package is declared.");
             return Ok(());
         }
         println!("explicitly installed but declared by no layer:");
@@ -546,5 +604,71 @@ fn cmd_capture(
     } else {
         println!("\nWritten. Review with `git diff` before committing.");
     }
+    Ok(())
+}
+
+/// Remove what lami used to manage but no longer declares.
+fn cmd_prune(
+    cfg: &Config,
+    host: String,
+    _dry: bool,
+    force: bool,
+    yes: bool,
+) -> Result<(), Error> {
+    let r = cfg.resolve(&host)?;
+    let name = real_user()?;
+    let home = real_home()?;
+    let actor = apply::Actor {
+        uid: write::uid_of(&name).unwrap_or(0),
+        gid: 0,
+        name,
+        home,
+    };
+
+    let stale = apply::stale(&r, &actor);
+    println!("host: {}\n", r.host.name);
+
+    if stale.is_empty() {
+        println!("Nothing to prune -- everything lami manages is still declared.");
+        return Ok(());
+    }
+
+    for p in &stale.packages {
+        println!("  - package  {p}");
+    }
+    for s in &stale.services {
+        println!("  - service  {s}");
+    }
+    for f in &stale.files {
+        println!("  - file     {f}");
+    }
+    println!("\n{} item(s) lami used to manage and no longer declares.", stale.len());
+
+    // Dry run is the DEFAULT. Removal has to be asked for twice: once by
+    // choosing this command at all, and once by saying --force. A tool that
+    // deletes because you typed the wrong subcommand is not one to trust with
+    // root.
+    if !force {
+        println!("\nNothing was removed. To go ahead:\n\n  sudo lami prune --force");
+        return Ok(());
+    }
+
+    apply::require_root()?;
+
+    if !yes {
+        print!("\nRemove these {} item(s)? [y/N] ", stale.len());
+        use std::io::Write as _;
+        std::io::stdout().flush().ok();
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer).ok();
+        if !matches!(answer.trim(), "y" | "Y") {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
+
+    println!();
+    apply::run_prune(&stale)?;
+    println!("\nPruned {} item(s).", stale.len());
     Ok(())
 }

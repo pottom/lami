@@ -52,11 +52,17 @@ impl Edit {
     pub fn summary(&self) -> String {
         let b: Vec<&str> = self.before.lines().collect();
         let a: Vec<&str> = self.after.lines().collect();
-        a.iter()
-            .filter(|l| !b.contains(l))
-            .map(|l| format!("+{l}"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        let mut out: Vec<String> = b
+            .iter()
+            .filter(|l| !a.contains(l))
+            .map(|l| format!("-{l}"))
+            .collect();
+        out.extend(a.iter().filter(|l| !b.contains(l)).map(|l| format!("+{l}")));
+        if out.is_empty() {
+            "(no change)".into()
+        } else {
+            out.join("\n")
+        }
     }
 }
 
@@ -241,4 +247,49 @@ services {
         assert!(err.to_string().contains("packages {"), "{err}");
         std::fs::remove_file(&p).ok();
     }
+}
+
+/// Copy a file's live content back into the layer that declares it.
+///
+/// Only `from=` sources can round-trip. An inline `text` block may contain
+/// template expressions, and rendering is not reversible -- there is no way to
+/// tell which part of the result came from `{{ cpu_threads }}`. Rather than
+/// guess, those are reported as needing a hand edit, which is also why the
+/// layer files in this repo prefer `from=` for anything likely to be tweaked
+/// in place.
+pub fn capture_file(
+    decl: &crate::config::FileDecl,
+    live: &Path,
+    dry: bool,
+) -> Result<Edit> {
+    let source = match &decl.source {
+        crate::config::Source::From(p) => p.clone(),
+        crate::config::Source::Text(_) => {
+            return Err(Error::Other(format!(
+                "{} is declared as an inline `text` block, which cannot be captured.\n\
+                 \nRendering is not reversible: there is no way to tell which part of the\n\
+                 file came from a template expression. Edit it in the layer instead:\n\
+                 \n  {}",
+                decl.path, decl.origin
+            )))
+        }
+    };
+
+    let after = std::fs::read_to_string(live).map_err(|source| Error::Io {
+        path: live.to_path_buf(),
+        source,
+    })?;
+    let before = std::fs::read_to_string(&source).unwrap_or_default();
+
+    if !dry {
+        std::fs::write(&source, &after).map_err(|e| Error::Io {
+            path: source.clone(),
+            source: e,
+        })?;
+    }
+    Ok(Edit {
+        file: source,
+        before,
+        after,
+    })
 }

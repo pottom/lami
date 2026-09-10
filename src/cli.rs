@@ -76,6 +76,10 @@ pub enum Command {
         #[arg(long)]
         package: Option<String>,
 
+        /// A managed file whose live content should be copied back.
+        #[arg(long)]
+        file: Option<String>,
+
         /// Which layer it belongs in.
         #[arg(long)]
         layer: Option<String>,
@@ -83,6 +87,25 @@ pub enum Command {
         /// Show the edit without writing it.
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// Remove what lami used to manage but no longer declares.
+    ///
+    /// Only ever touches things a previous `apply` recorded as managed. A
+    /// package you installed by hand is never a candidate, because lami never
+    /// claimed it.
+    Prune {
+        /// Show what would be removed and stop. This is the default.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Actually remove. Asks for confirmation unless --yes is given too.
+        #[arg(long)]
+        force: bool,
+
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Render managed files without installing them.

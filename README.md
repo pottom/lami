@@ -3,8 +3,9 @@
 Layered, declarative system configuration for Arch Linux — packages, `/etc`,
 systemd units and dotfiles through **one** tool and **one** config.
 
-> **Status: early development.** `apply` and `capture` work for packages,
-> files, services and hooks. Removal (`prune`) is not written yet.
+> **Status: early development.** Packages, `/etc` files, services and hooks
+> are managed end to end: `diff`, `apply`, `capture`, `prune`. Dotfiles are
+> next.
 
 ## Why
 
@@ -213,6 +214,27 @@ round-trip: capture must not reformat your file or eat the comment explaining
 why a package is there. Verified against a real config — adding one package
 produced exactly one added line and zero deleted ones, with every end-of-line
 comment intact.
+
+## Pruning
+
+`apply` never removes anything, so removal is a separate command:
+
+```sh
+lami prune              # show what is stale; this is the default
+sudo lami prune --force # actually remove, after confirming
+```
+
+Only things a **previous `apply` recorded as managed** are ever candidates. A
+package you installed by hand is never offered, because lami never claimed it —
+that distinction is the entire reason there is a state file at
+`/var/lib/lami/state.json`.
+
+Removal has to be asked for twice: once by choosing the command, once by saying
+`--force`. A tool that deletes because of a mistyped subcommand is not one to
+trust with root.
+
+Services are **disabled, not stopped**. Stopping a display manager out from
+under a running session because a layer was edited would be indefensible.
 
 ## Diffing
 

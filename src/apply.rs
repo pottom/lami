@@ -110,6 +110,12 @@ pub fn run_apply(r: &Resolved<'_>, actor: &Actor, dry: bool) -> Result<usize> {
 
     if report.changes.is_empty() {
         println!("Nothing to do -- the machine already matches the config.");
+        // Still record what is managed. The state file describes what IS
+        // declared, not what happened to change on this run -- otherwise a
+        // no-op apply would leave prune with a stale picture.
+        if !dry {
+            record_state(r, actor)?;
+        }
         return Ok(0);
     }
 
@@ -214,11 +220,112 @@ pub fn run_apply(r: &Resolved<'_>, actor: &Actor, dry: bool) -> Result<usize> {
         }
     }
 
+    record_state(r, actor)?;
     Ok(report.changes.len())
+}
+
+/// Remember what is managed now, so that a later `prune` can tell "no longer
+/// declared" apart from "never declared".
+fn record_state(r: &Resolved<'_>, actor: &Actor) -> Result<()> {
+    let mut st = crate::state::State {
+        host: r.host.name.clone(),
+        ..Default::default()
+    };
+    for (_, d) in r.packages() {
+        st.packages.insert(d.name.clone());
+    }
+    for (_, d) in r.services() {
+        st.services.insert(systemd::qualify(&d.name));
+    }
+    for (_, f) in r.files() {
+        st.files
+            .insert(render::target_path(f, &actor.home).display().to_string());
+    }
+    crate::state::save(&st)
 }
 
 /// Unused import guard: keeps systemd in scope for future service work.
 #[allow(dead_code)]
 fn _unused(_: &Path) {
     let _ = systemd::available();
+}
+
+/// What is no longer declared, but a previous apply recorded as managed.
+pub struct Stale {
+    pub packages: Vec<String>,
+    pub services: Vec<String>,
+    pub files: Vec<String>,
+}
+
+impl Stale {
+    pub fn is_empty(&self) -> bool {
+        self.packages.is_empty() && self.services.is_empty() && self.files.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.packages.len() + self.services.len() + self.files.len()
+    }
+}
+
+/// Work out what a `prune` would remove.
+///
+/// The state file is the whole point: it is what distinguishes "lami put this
+/// here and no longer wants it" from "somebody installed this by hand". Only
+/// the first is ever a candidate.
+pub fn stale(r: &Resolved<'_>, actor: &Actor) -> Stale {
+    let prev = crate::state::state_load();
+
+    let now_pkgs: std::collections::BTreeSet<String> =
+        r.packages().iter().map(|(_, d)| d.name.clone()).collect();
+    let now_svcs: std::collections::BTreeSet<String> = r
+        .services()
+        .iter()
+        .map(|(_, d)| systemd::qualify(&d.name))
+        .collect();
+    let now_files: std::collections::BTreeSet<String> = r
+        .files()
+        .iter()
+        .map(|(_, f)| render::target_path(f, &actor.home).display().to_string())
+        .collect();
+
+    Stale {
+        packages: prev.packages.difference(&now_pkgs).cloned().collect(),
+        services: prev.services.difference(&now_svcs).cloned().collect(),
+        files: prev.files.difference(&now_files).cloned().collect(),
+    }
+}
+
+pub fn run_prune(s: &Stale) -> Result<()> {
+    if !s.services.is_empty() {
+        println!("services:");
+        // Disabled, not stopped. Stopping a display manager out from under a
+        // running session because a layer was edited would be indefensible.
+        run(Command::new("systemctl")
+            .arg("disable")
+            .args(s.services.iter().map(|x| x.as_str())))?;
+        for u in &s.services {
+            println!("  {u} disabled");
+        }
+    }
+    if !s.files.is_empty() {
+        println!("files:");
+        for f in &s.files {
+            match std::fs::remove_file(f) {
+                Ok(()) => println!("  {f} removed"),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    println!("  {f} (already gone)")
+                }
+                Err(e) => println!("  {f} FAILED: {e}"),
+            }
+        }
+    }
+    if !s.packages.is_empty() {
+        println!("packages:");
+        // -Rs removes dependencies that nothing else needs; -n drops config
+        // files pacman saved. Deliberately NOT --nosave on the pacman side of
+        // /etc: pacsave files are the last line of defence against a mistake.
+        run(Command::new("pacman")
+            .args(["-Rs", "--noconfirm"])
+            .args(s.packages.iter().map(|x| x.as_str())))?;
+    }
+    Ok(())
 }
