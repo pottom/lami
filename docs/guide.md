@@ -317,6 +317,18 @@ sudo lami apply
 In order: packages, files, services, hooks. Root is needed because it writes to
 `/etc` — but only for `apply`; every read-only command runs unprivileged.
 
+Two details of that order are worth knowing, because both were found by
+installing a config into an empty machine and watching it fail:
+
+- **`/etc/pacman.conf` is written first**, before packages, if a layer manages
+  it. It decides which repositories exist, so applying it after the package
+  phase means the first run installs from a repository list the config has not
+  applied yet. It is the only file treated this way.
+- **The machine is read again after packages are installed.** A unit whose
+  package did not exist a moment ago cannot be reported as disabled, so
+  otherwise every service installed by that run would be left alone and a
+  second apply would be needed.
+
 **`apply` never removes anything.** A typo'd layer name cannot uninstall your
 desktop.
 

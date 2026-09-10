@@ -126,6 +126,95 @@ fn run(cmd: &mut Command) -> Result<()> {
     Ok(())
 }
 
+/// The one file that has to be written before anything else.
+///
+/// It is pacman's own configuration: which repositories exist, and therefore
+/// where packages can come from at all. Writing it after the package phase --
+/// as every other managed file is -- means the first apply on a fresh machine
+/// installs packages from a repository list the config has not applied yet.
+/// With [multilib] declared but not yet enabled, `pacman -S lib32-...` cannot
+/// find the package; with it enabled but its database never downloaded,
+/// pacman refuses the transaction outright:
+///
+///   error: failed to prepare transaction (could not find database)
+///
+/// This is a special case, and deliberately the only one. lami is Arch-only,
+/// so pacman is not one dependency among many -- it is the package layer.
+const PACMAN_CONF: &str = "/etc/pacman.conf";
+
+/// Write the managed files the report asks for, restricted to those whose
+/// target path `want` accepts. Returns how many were written.
+fn write_files(
+    r: &Resolved<'_>,
+    report: &diff::Report,
+    settings: &crate::config::Settings,
+    actor: &Actor,
+    heading: &str,
+    want: impl Fn(&str) -> bool,
+) -> Result<usize> {
+    let wanted: Vec<&str> = report
+        .changes
+        .iter()
+        .filter_map(|c| match c {
+            Change::CreateFile { path, .. }
+            | Change::UpdateFile { path, .. }
+            | Change::FixPermissions { path, .. } => Some(path.as_str()),
+            _ => None,
+        })
+        .filter(|p| want(p))
+        .collect();
+    if wanted.is_empty() {
+        return Ok(0);
+    }
+
+    println!("{}", crate::color::bold(heading));
+    let mut n = 0;
+    for (layer, f) in r.files() {
+        if !wanted.contains(&f.path.as_str()) {
+            continue;
+        }
+        let content = render::file(r, layer, f, settings, &actor.home, &actor.name)?;
+        let pm = perms::with_overrides(
+            perms::secret_aware(f, &actor.name),
+            f.owner.as_deref(),
+            f.group.as_deref(),
+            f.mode,
+        );
+        let target = render::target_path(f, &actor.home);
+        write::write(&target, &content, &pm.owner, &pm.group, pm.mode)?;
+        println!("  {}  ({:o} {}:{})", f.path, pm.mode, pm.owner, pm.group);
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// Run the hooks the report asks for, restricted to those watching a path
+/// `want` accepts.
+fn run_hooks(report: &diff::Report, want: impl Fn(&str) -> bool) -> Result<usize> {
+    let hooks: Vec<(&String, &String)> = report
+        .changes
+        .iter()
+        .filter_map(|c| match c {
+            Change::RunHook { run, because, .. } => Some((run, because)),
+            _ => None,
+        })
+        .filter(|(_, because)| want(because))
+        .collect();
+    if hooks.is_empty() {
+        return Ok(0);
+    }
+    println!("{}", crate::color::bold("hooks:"));
+    let mut n = 0;
+    for (cmd, because) in hooks {
+        println!("  {cmd}   (because {because} changed)");
+        let mut parts = cmd.split_whitespace();
+        let Some(bin) = parts.next() else { continue };
+        run(Command::new(bin).args(parts))?;
+        n += 1;
+    }
+    Ok(n)
+}
+
 pub fn run_apply(
     r: &Resolved<'_>,
     actor: &Actor,
@@ -174,6 +263,11 @@ pub fn run_apply(
             _ => None,
         })
         .collect();
+    // --- pacman's own configuration, before it is used -------------------
+    let early = write_files(r, &report, settings, actor, "pacman configuration:", |p| {
+        p == PACMAN_CONF
+    })? + run_hooks(&report, |p| p == PACMAN_CONF)?;
+
     let package_changes = missing.len() + adopt.len();
     if package_changes > 0 {
         println!("{}", crate::color::bold("packages:"));
@@ -191,49 +285,14 @@ pub fn run_apply(
     //
     // Found by installing this config into an empty VM: four services stayed
     // disabled and the next `diff` asked for them again.
-    let report = if package_changes > 0 {
+    let report = if package_changes > 0 || early > 0 {
         diff::compute(r, &actor.home, &actor.name, settings)?
     } else {
         report
     };
 
     // --- files ------------------------------------------------------------
-    let files: Vec<&Change> = report
-        .changes
-        .iter()
-        .filter(|c| {
-            matches!(
-                c,
-                Change::CreateFile { .. }
-                    | Change::UpdateFile { .. }
-                    | Change::FixPermissions { .. }
-            )
-        })
-        .collect();
-    if !files.is_empty() {
-        println!("{}", crate::color::bold("files:"));
-        for (layer, f) in r.files() {
-            let touched = files.iter().any(|c| match c {
-                Change::CreateFile { path, .. }
-                | Change::UpdateFile { path, .. }
-                | Change::FixPermissions { path, .. } => *path == f.path,
-                _ => false,
-            });
-            if !touched {
-                continue;
-            }
-            let content = render::file(r, layer, f, settings, &actor.home, &actor.name)?;
-            let pm = perms::with_overrides(
-                perms::secret_aware(f, &actor.name),
-                f.owner.as_deref(),
-                f.group.as_deref(),
-                f.mode,
-            );
-            let target = render::target_path(f, &actor.home);
-            write::write(&target, &content, &pm.owner, &pm.group, pm.mode)?;
-            println!("  {}  ({:o} {}:{})", f.path, pm.mode, pm.owner, pm.group);
-        }
-    }
+    write_files(r, &report, settings, actor, "files:", |_| true)?;
 
     // --- services ---------------------------------------------------------
     //
@@ -291,26 +350,10 @@ pub fn run_apply(
     }
 
     // --- hooks ------------------------------------------------------------
-    let hooks: Vec<(&String, &String)> = report
-        .changes
-        .iter()
-        .filter_map(|c| match c {
-            Change::RunHook { run, because, .. } => Some((run, because)),
-            _ => None,
-        })
-        .collect();
-    if !hooks.is_empty() {
-        println!("{}", crate::color::bold("hooks:"));
-        for (cmd, because) in hooks {
-            println!("  {cmd}   (because {because} changed)");
-            let mut parts = cmd.split_whitespace();
-            let Some(bin) = parts.next() else { continue };
-            run(Command::new(bin).args(parts))?;
-        }
-    }
+    run_hooks(&report, |_| true)?;
 
     record_state(r, actor)?;
-    Ok(package_changes + report.changes.len())
+    Ok(early + package_changes + report.changes.len())
 }
 
 /// Remember what is managed now, so that a later `prune` can tell "no longer

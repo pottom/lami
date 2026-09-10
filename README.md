@@ -180,6 +180,19 @@ sudo lami apply              # install, write, enable, run hooks
 In that order: a service cannot be enabled before its package exists, and a
 hook exists to react to a file that has just changed.
 
+One file jumps the queue: **`/etc/pacman.conf`**, if a layer manages it. It is
+pacman's own configuration — which repositories exist, and therefore where
+packages can come from at all — so it is written, and its hooks run, before
+the package phase. Otherwise the first apply on a fresh machine would install
+packages from a repository list the config has not applied yet. That is the
+only special case, and lami being Arch-only is what makes it a fair one:
+pacman is not a dependency among many, it is the package layer.
+
+After packages are installed the machine is read again, and everything from
+there on is measured against what is actually there now. A unit whose package
+did not exist a moment ago cannot be reported as disabled, so without this a
+fresh machine would need a second apply to converge.
+
 **`apply` never removes anything.** A typo'd layer name or a half-finished
 config must not be able to uninstall your desktop. Removal is a separate
 command with its own confirmation.
