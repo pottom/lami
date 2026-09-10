@@ -20,6 +20,7 @@ miette = { version = "7", features = ["fancy"] }
 thiserror = "2"
 
 libc = "0.2"
+tempfile = "3"
 minijinja = { version = "2.24", default-features = false, features = ["builtins"] }
 clap = { version = "4", features = ["derive", "env"] }
 

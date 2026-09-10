@@ -1,9 +1,11 @@
 #![allow(dead_code)] // parts of the config model are for the next milestone
 
+mod apply;
 mod cli;
 mod config;
 mod diff;
 mod error;
+mod write;
 mod pacman;
 mod perms;
 mod render;
@@ -103,6 +105,9 @@ fn main() -> Result<()> {
         Command::Show => cmd_show(&cfg, cli.host.unwrap_or_else(hostname))?,
         Command::Why { target } => cmd_why(&cfg, cli.host.unwrap_or_else(hostname), &target)?,
         Command::Check => cmd_check(&cfg, cli.host.unwrap_or_else(hostname))?,
+        Command::Apply { dry_run } => {
+            cmd_apply(&cfg, cli.host.unwrap_or_else(hostname), dry_run)?
+        }
         Command::Diff { undeclared } => {
             cmd_diff(&cfg, cli.host.unwrap_or_else(hostname), undeclared)?
         }
@@ -435,6 +440,41 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
                 report.undeclared_packages.len()
             );
         }
+    }
+    Ok(())
+}
+
+/// Bring the machine in line with the config.
+fn cmd_apply(cfg: &Config, host: String, dry: bool) -> Result<(), Error> {
+    if !dry {
+        apply::require_root()?;
+    }
+    let r = cfg.resolve(&host)?;
+
+    let name = real_user()?;
+    let home = real_home()?;
+    let uid = write::uid_of(&name)
+        .ok_or_else(|| Error::Other(format!("no such user: {name}")))?;
+    let gid = unsafe {
+        let c = std::ffi::CString::new(name.clone()).unwrap();
+        let pw = libc::getpwnam(c.as_ptr());
+        if pw.is_null() {
+            return Err(Error::Other(format!("no passwd entry for {name}")));
+        }
+        (*pw).pw_gid
+    };
+
+    let actor = apply::Actor {
+        name,
+        uid,
+        gid,
+        home,
+    };
+
+    println!("host: {}\n", r.host.name);
+    let n = apply::run_apply(&r, &actor, dry)?;
+    if n > 0 && !dry {
+        println!("\nApplied {n} change(s).");
     }
     Ok(())
 }

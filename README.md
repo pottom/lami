@@ -3,9 +3,9 @@
 Layered, declarative system configuration for Arch Linux — packages, `/etc`,
 systemd units and dotfiles through **one** tool and **one** config.
 
-> **Status: early development.** Only read-only commands work today
-> (`list`, `show`, `why`, `check`, `render`, `diff`). Nothing is written to
-> your system.
+> **Status: early development.** `apply` works for packages, files, services
+> and hooks. Removal (`prune`) and pulling changes back into the repo
+> (`capture`) are not written yet.
 
 ## Why
 
@@ -161,6 +161,42 @@ nvidia-open  (package)
   applies:    layer 'gui' is in sam's layers list
   condition:  gpu=nvidia (this host: gpu = nvidia)
 ```
+
+## Applying
+
+```sh
+sudo lami apply --dry-run    # show the plan and stop
+sudo lami apply              # install, write, enable, run hooks
+```
+
+In that order: a service cannot be enabled before its package exists, and a
+hook exists to react to a file that has just changed.
+
+**`apply` never removes anything.** A typo'd layer name or a half-finished
+config must not be able to uninstall your desktop. Removal is a separate
+command with its own confirmation.
+
+Root is required, because it writes to `/etc` and enables units — but only for
+`apply`. Every read-only command deliberately runs unprivileged.
+
+Packages available from a repository are installed by pacman as root. AUR
+packages are installed by dropping to the invoking user, because every AUR
+helper refuses to run as root — rightly, since it builds untrusted PKGBUILDs.
+The user, home directory and group all come from passwd rather than the
+environment: under `sudo`, `$HOME` may still be the caller's, and the build
+cache would land in the wrong place owned by the wrong user.
+
+Files are written atomically: a temporary file in the **target's own
+directory**, then a rename over the target. The directory matters — on a stock
+Arch btrfs layout `@` and `@home` are separate filesystems as far as
+`rename(2)` is concerned, so staging in `/tmp` and renaming into `$HOME` fails
+with `EXDEV` on most Arch installs.
+
+Ownership and mode are set on the file descriptor, never on a path: this is a
+root process writing into directories an unprivileged user controls, and
+between a `stat` and an `open` a path can be swapped for a symlink to
+`/etc/shadow`. Ownership is set before mode, since `chown` clears the setuid
+and setgid bits.
 
 ## Diffing
 

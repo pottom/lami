@@ -55,6 +55,18 @@ pub enum Command {
         undeclared: bool,
     },
 
+    /// Bring the machine in line with the config.
+    ///
+    /// Installs missing packages, writes managed files, enables declared
+    /// services and runs any hook whose watched file changed -- in that order.
+    ///
+    /// Never removes anything. That is what `prune` is for.
+    Apply {
+        /// Show what would be done and stop.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Render managed files without installing them.
     ///
     /// With no arguments, every file this host would get is printed with a
