@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo build --verbose
+      - run: cargo test --verbose
+      - run: cargo clippy -- -D warnings
+      - run: cargo fmt --check
+
+      # kdl-rs autoformat() silently deletes end-of-line comments (issue #179)
+      # and rewrites number literals. capture writes into config a person
+      # hand-wrote, so calling it would be data loss, not a style choice.
+      - name: autoformat must never be called
+        run: |
+          if grep -rn 'autoformat' src/; then
+            echo "autoformat() is banned -- see src/capture.rs for why"
+            exit 1
+          fi
