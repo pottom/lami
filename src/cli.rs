@@ -67,6 +67,24 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Pull a change made on this machine back into the repo.
+    ///
+    /// With no arguments it lists what could be captured and how. Naming a
+    /// package files it into a layer.
+    Capture {
+        /// The package to file into a layer.
+        #[arg(long)]
+        package: Option<String>,
+
+        /// Which layer it belongs in.
+        #[arg(long)]
+        layer: Option<String>,
+
+        /// Show the edit without writing it.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Render managed files without installing them.
     ///
     /// With no arguments, every file this host would get is printed with a

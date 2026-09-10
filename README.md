@@ -3,9 +3,8 @@
 Layered, declarative system configuration for Arch Linux — packages, `/etc`,
 systemd units and dotfiles through **one** tool and **one** config.
 
-> **Status: early development.** `apply` works for packages, files, services
-> and hooks. Removal (`prune`) and pulling changes back into the repo
-> (`capture`) are not written yet.
+> **Status: early development.** `apply` and `capture` work for packages,
+> files, services and hooks. Removal (`prune`) is not written yet.
 
 ## Why
 
@@ -197,6 +196,23 @@ root process writing into directories an unprivileged user controls, and
 between a `stat` and an `open` a path can be swapped for a symlink to
 `/etc/shadow`. Ownership is set before mode, since `chown` clears the setuid
 and setgid bits.
+
+## Capturing
+
+The other direction: something changed on the machine and should end up in the
+repo.
+
+```sh
+lami capture                                       # what could be captured
+lami capture --package cowsay --layer tools --dry-run
+lami capture --package cowsay --layer tools
+```
+
+This edits the config **you** hand-wrote, which is why the format has to
+round-trip: capture must not reformat your file or eat the comment explaining
+why a package is there. Verified against a real config — adding one package
+produced exactly one added line and zero deleted ones, with every end-of-line
+comment intact.
 
 ## Diffing
 

@@ -1,6 +1,7 @@
 #![allow(dead_code)] // parts of the config model are for the next milestone
 
 mod apply;
+mod capture;
 mod cli;
 mod config;
 mod diff;
@@ -108,6 +109,17 @@ fn main() -> Result<()> {
         Command::Apply { dry_run } => {
             cmd_apply(&cfg, cli.host.unwrap_or_else(hostname), dry_run)?
         }
+        Command::Capture {
+            package,
+            layer,
+            dry_run,
+        } => cmd_capture(
+            &cfg,
+            cli.host.unwrap_or_else(hostname),
+            package.as_deref(),
+            layer.as_deref(),
+            dry_run,
+        )?,
         Command::Diff { undeclared } => {
             cmd_diff(&cfg, cli.host.unwrap_or_else(hostname), undeclared)?
         }
@@ -475,6 +487,64 @@ fn cmd_apply(cfg: &Config, host: String, dry: bool) -> Result<(), Error> {
     let n = apply::run_apply(&r, &actor, dry)?;
     if n > 0 && !dry {
         println!("\nApplied {n} change(s).");
+    }
+    Ok(())
+}
+
+/// Pull a change made on this machine back into the repo.
+fn cmd_capture(
+    cfg: &Config,
+    host: String,
+    package: Option<&str>,
+    layer: Option<&str>,
+    dry: bool,
+) -> Result<(), Error> {
+    let r = cfg.resolve(&host)?;
+
+    let Some(package) = package else {
+        // No target named: show what is on offer.
+        let report = diff::compute(&r, &real_home()?, &real_user()?)?;
+        println!("host: {}\n", r.host.name);
+
+        if report.undeclared_packages.is_empty() {
+            println!("Nothing to capture -- every explicitly installed package is declared.");
+            return Ok(());
+        }
+        println!("explicitly installed but declared by no layer:");
+        for p in &report.undeclared_packages {
+            println!("  {p}");
+        }
+        println!("\nFile one into a layer with:");
+        println!("  lami capture --package <name> --layer <layer>");
+        println!("\nlayers on this host: {}", 
+            r.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", "));
+        return Ok(());
+    };
+
+    let Some(layer_name) = layer else {
+        return Err(Error::Other(format!(
+            "which layer should {package} go in?\n\
+             \n  lami capture --package {package} --layer <layer>\n\
+             \nlayers on this host: {}",
+            r.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", ")
+        )));
+    };
+
+    let target = cfg.layers.get(layer_name).ok_or_else(|| {
+        Error::Other(format!(
+            "no layer named '{layer_name}'.\nknown layers: {}",
+            cfg.layers.keys().cloned().collect::<Vec<_>>().join(", ")
+        ))
+    })?;
+
+    let edit = capture::add_package(&target.path, package, dry)?;
+
+    println!("{}", edit.file.display());
+    println!("{}", edit.summary());
+    if dry {
+        println!("\n--dry-run: nothing was written.");
+    } else {
+        println!("\nWritten. Review with `git diff` before committing.");
     }
     Ok(())
 }

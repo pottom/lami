@@ -152,3 +152,37 @@ fn a_hook_runs_only_after_its_file_changes() {
         "nothing changed, so the hook must not run again:\n{again}"
     );
 }
+
+#[test]
+fn capture_dry_run_writes_nothing() {
+    // capture edits the config you hand-wrote, so seeing the edit before it
+    // happens matters more here than almost anywhere else.
+    let base = std::env::temp_dir().join(format!("lami-capdry-{}", std::process::id()));
+    fs::remove_dir_all(&base).ok();
+    let cfg = base.join("cfg");
+    fs::create_dir_all(cfg.join("hosts")).unwrap();
+    fs::create_dir_all(cfg.join("layers/only")).unwrap();
+    fs::write(cfg.join("hosts/testbox.kdl"), "description \"f\"\nlayers \"only\"\n").unwrap();
+
+    let layer = cfg.join("layers/only/layer.kdl");
+    let original = "description \"f\"\n\npackages {\n    bash    // a comment worth keeping\n}\n";
+    fs::write(&layer, original).unwrap();
+
+    let exe = env!("CARGO_BIN_EXE_lami");
+    let out = Command::new(exe)
+        .args(["--config-dir", cfg.to_str().unwrap(), "--host", "testbox"])
+        .args(["capture", "--package", "cowsay", "--layer", "only", "--dry-run"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    assert!(text.contains("+    cowsay"), "should show the edit:\n{text}");
+    assert!(text.contains("nothing was written"), "{text}");
+    assert_eq!(
+        fs::read_to_string(&layer).unwrap(),
+        original,
+        "--dry-run must leave the file untouched"
+    );
+
+    fs::remove_dir_all(&base).ok();
+}
