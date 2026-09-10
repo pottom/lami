@@ -40,3 +40,24 @@ when ddc=on {
 when class="laptop" {
     packages { brightnessctl }
 }
+
+// The VA-API driver name differs per GPU, so the file is declared inside the
+// matching `when` block rather than templated with a lookup table. Only one
+// of these can apply to a given host.
+when gpu="intel" {
+    file "/etc/environment.d/50-gpu.conf" {
+        text """
+        # Managed by lami.
+        LIBVA_DRIVER_NAME=iHD
+        """
+    }
+}
+
+when gpu="nvidia" {
+    file "/etc/environment.d/50-gpu.conf" {
+        text """
+        # Managed by lami.
+        LIBVA_DRIVER_NAME=nvidia
+        """
+    }
+}

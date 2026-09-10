@@ -4,8 +4,10 @@ mod cli;
 mod config;
 mod error;
 mod pacman;
+mod render;
 
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use miette::Result;
@@ -80,6 +82,13 @@ fn main() -> Result<()> {
         Command::Show => cmd_show(&cfg, cli.host.unwrap_or_else(hostname))?,
         Command::Why { target } => cmd_why(&cfg, cli.host.unwrap_or_else(hostname), &target)?,
         Command::Check => cmd_check(&cfg, cli.host.unwrap_or_else(hostname))?,
+        Command::Render { target, out, list } => cmd_render(
+            &cfg,
+            cli.host.unwrap_or_else(hostname),
+            target.as_deref(),
+            out.as_deref(),
+            list,
+        )?,
     }
     Ok(())
 }
@@ -229,6 +238,85 @@ fn cmd_check(cfg: &Config, host: String) -> Result<(), Error> {
                 unknown.len(),
                 list
             )));
+        }
+    }
+    Ok(())
+}
+
+/// Render managed files: to the screen or into a directory, one or all.
+///
+/// This is deliberately available before `apply` exists. Seeing exactly what
+/// would be written, before anything is written, is the cheapest way to catch
+/// a template mistake.
+fn cmd_render(
+    cfg: &Config,
+    host: String,
+    target: Option<&str>,
+    out: Option<&Path>,
+    list_only: bool,
+) -> Result<(), Error> {
+    let r = cfg.resolve(&host)?;
+    let home = real_home()?;
+
+    let mut files = r.files();
+    if let Some(t) = target {
+        files.retain(|(_, f)| f.path == t);
+        if files.is_empty() {
+            return Err(Error::Other(format!(
+                "'{t}' is not a file managed for {}.\n\
+                 Run `lami render --list` to see the managed paths.",
+                r.host.name
+            )));
+        }
+    }
+
+    if files.is_empty() {
+        println!("No files are managed for {} yet.", r.host.name);
+        return Ok(());
+    }
+
+    if list_only {
+        for (layer, f) in &files {
+            println!("{}\t{}\t{}", f.path, layer.name, f.origin);
+        }
+        return Ok(());
+    }
+
+    // A single named target prints raw, so it can be piped into a diff.
+    let raw = target.is_some() && out.is_none();
+
+    for (layer, f) in &files {
+        let content = render::file(&r, layer, f)?;
+
+        match out {
+            Some(dir) => {
+                // Mirror the absolute path under the output directory, so the
+                // tree can be compared with the live system directly.
+                let rel = render::target_path(f, &home);
+                let rel = rel.strip_prefix("/").unwrap_or(&rel);
+                let dest = dir.join(rel);
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent).map_err(|source| Error::Io {
+                        path: parent.to_path_buf(),
+                        source,
+                    })?;
+                }
+                fs::write(&dest, &content).map_err(|source| Error::Io {
+                    path: dest.clone(),
+                    source,
+                })?;
+                println!("{}", dest.display());
+            }
+            None if raw => print!("{content}"),
+            None => {
+                println!("\x1b[1m=== {} \x1b[0m", f.path);
+                println!("    layer {}, declared at {}", layer.name, f.origin);
+                println!();
+                for line in content.lines() {
+                    println!("    {line}");
+                }
+                println!();
+            }
         }
     }
     Ok(())

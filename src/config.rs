@@ -114,6 +114,28 @@ impl std::fmt::Display for Condition {
     }
 }
 
+/// Where a managed file's content comes from.
+#[derive(Debug, Clone)]
+pub enum Source {
+    /// A file inside the layer directory: `file "/etc/foo" from="foo.conf"`
+    From(PathBuf),
+    /// Inline content: `file "/etc/foo" { text "..." }`
+    ///
+    /// KDL v2 multi-line strings dedent automatically, so the indentation used
+    /// to keep the config readable does not leak into the rendered file.
+    Text(String),
+}
+
+/// A file this host should have.
+#[derive(Debug, Clone)]
+pub struct FileDecl {
+    /// Absolute target path, or `~/...` for the user's home.
+    pub path: String,
+    pub source: Source,
+    pub origin: Origin,
+    pub condition: Option<Condition>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Layer {
     pub name: String,
@@ -121,6 +143,9 @@ pub struct Layer {
     pub needs: Vec<String>,
     pub packages: Vec<Decl>,
     pub services: Vec<Decl>,
+    pub files: Vec<FileDecl>,
+    /// The layer's own directory, which `from=` paths are relative to.
+    pub dir: PathBuf,
     pub path: PathBuf,
 }
 
@@ -280,6 +305,8 @@ impl Layer {
             needs: Vec::new(),
             packages: Vec::new(),
             services: Vec::new(),
+            files: Vec::new(),
+            dir: path.parent().unwrap_or(Path::new(".")).to_path_buf(),
             path: path.to_path_buf(),
         };
 
@@ -342,7 +369,11 @@ fn collect(
                     collect(children, src, path, Some(inner), layer)?;
                 }
             }
-            _ => { /* file / on-change: next milestone */ }
+            "file" => {
+                let decl = parse_file(node, src, path, cond.as_ref(), &layer.dir)?;
+                layer.files.push(decl);
+            }
+            _ => { /* on-change: next milestone */ }
         }
     }
     Ok(())
@@ -484,6 +515,27 @@ impl Resolved<'_> {
         }
     }
 
+    /// The files that actually apply to this host, in layer order.
+    ///
+    /// A later layer declaring the same path wins, which is what lets a more
+    /// specific layer override a general one.
+    pub fn files(&self) -> Vec<(&Layer, &FileDecl)> {
+        let mut out: Vec<(&Layer, &FileDecl)> = Vec::new();
+        for layer in &self.layers {
+            for f in &layer.files {
+                if !self.matches(&f.condition) {
+                    continue;
+                }
+                if let Some(slot) = out.iter_mut().find(|(_, e)| e.path == f.path) {
+                    *slot = (*layer, f);
+                } else {
+                    out.push((*layer, f));
+                }
+            }
+        }
+        out
+    }
+
     /// The packages that actually apply to this host, in layer order.
     pub fn packages(&self) -> Vec<(&Layer, &Decl)> {
         self.select(|l| &l.packages)
@@ -506,4 +558,73 @@ impl Resolved<'_> {
         }
         out
     }
+}
+
+
+/// `file "/etc/foo" from="foo.conf"` or `file "/etc/foo" { text "..." }`
+fn parse_file(
+    node: &KdlNode,
+    src: &str,
+    path: &Path,
+    cond: Option<&Condition>,
+    layer_dir: &Path,
+) -> Result<FileDecl> {
+    let span = (node.span().offset(), node.span().len());
+
+    let target = args(node).into_iter().next().ok_or_else(|| Error::Config {
+        msg: "`file` needs a target path".into(),
+        src: named(path, src),
+        span: span.into(),
+        label: "e.g. `file \"/etc/foo.conf\" from=\"foo.conf\"`".into(),
+    })?;
+
+    let from = node
+        .entries()
+        .iter()
+        .find(|e| e.name().is_some_and(|n| n.value() == "from"))
+        .and_then(|e| match e.value() {
+            KdlValue::String(s) => Some(s.clone()),
+            _ => None,
+        });
+
+    let text = node.children().and_then(|c| {
+        c.nodes()
+            .iter()
+            .find(|n| n.name().value() == "text")
+            .and_then(|n| match n.entries().first().map(|e| e.value()) {
+                Some(KdlValue::String(s)) => Some(s.clone()),
+                _ => None,
+            })
+    });
+
+    let source = match (from, text) {
+        (Some(f), None) => Source::From(layer_dir.join(f)),
+        (None, Some(t)) => Source::Text(t),
+        (Some(_), Some(_)) => {
+            return Err(Error::Config {
+                msg: format!("`{target}` declares both `from=` and `text`"),
+                src: named(path, src),
+                span: span.into(),
+                label: "pick one".into(),
+            })
+        }
+        (None, None) => {
+            return Err(Error::Config {
+                msg: format!("`{target}` has no content"),
+                src: named(path, src),
+                span: span.into(),
+                label: "add `from=\"file\"` or a `text` child".into(),
+            })
+        }
+    };
+
+    Ok(FileDecl {
+        path: target,
+        source,
+        origin: Origin {
+            file: path.to_path_buf(),
+            line: line_of(src, node.span().offset()),
+        },
+        condition: cond.cloned(),
+    })
 }

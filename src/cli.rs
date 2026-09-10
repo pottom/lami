@@ -44,4 +44,23 @@ pub enum Command {
     /// Check the config against the system: are all packages available, is an
     /// AUR helper needed. Changes nothing.
     Check,
+
+    /// Render managed files without installing them.
+    ///
+    /// With no arguments, every file this host would get is printed with a
+    /// header. Name a path to print just that one, raw and pipeable. With
+    /// `--out` the files are written into a directory tree instead, so you can
+    /// diff them against the live system with your own tools.
+    Render {
+        /// Render only this target path.
+        target: Option<String>,
+
+        /// Write into this directory instead of printing.
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+
+        /// Only list the paths that would be rendered.
+        #[arg(long)]
+        list: bool,
+    },
 }

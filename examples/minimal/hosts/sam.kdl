@@ -6,5 +6,5 @@ gpu   "nvidia"
 ucode "amd"
 class "laptop"
 
-cpu-threads 16
+cpu_threads 16
 ddc   off           // internal panel; brightnessctl handles this instead

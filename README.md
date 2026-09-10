@@ -68,6 +68,48 @@ Switches are spelled `on` / `off`. `off` is worth having even though omitting
 the line would also disable the feature, because **it documents itself**: a
 missing line does not tell you whether the choice was considered or forgotten.
 
+## Files
+
+A layer can declare files, either taken verbatim from the layer directory or
+written inline. Inline content is a Jinja2 template — the same shape an HTML
+templating engine uses — with every host parameter available as a variable:
+
+```kdl
+file "/etc/pacman.conf" from="files/pacman.conf"
+
+file "/etc/makepkg.conf.d/99-local.conf" {
+    text """
+    MAKEFLAGS="-j{{ cpu_threads }}"
+    """
+}
+```
+
+KDL's triple-quoted strings dedent automatically, so the indentation that keeps
+the config readable never reaches the rendered file. Rendered files always end
+with a newline.
+
+Use `cpu_threads`, not `cpu-threads`: parameter names reach templates verbatim,
+and a hyphen would be read as subtraction.
+
+## Rendering
+
+Nothing is installed — you just look at what *would* be:
+
+```sh
+lami render                    # every managed file, with headers
+lami render --list             # just the paths, and where they are declared
+lami render /etc/hostname      # one file, raw and pipeable
+lami render --out ./preview    # a directory tree mirroring the target paths
+```
+
+The `--out` tree mirrors absolute paths, so it can be compared with the live
+system using your own tools:
+
+```sh
+lami render --out ./preview
+diff -ru ./preview/etc /etc 2>/dev/null | less
+```
+
 ## Provenance
 
 Every resource can say where it came from and why this host gets it:

@@ -24,3 +24,27 @@ when ucode="intel" {
 when ucode="amd" {
     packages { amd-ucode }
 }
+
+// A whole file taken verbatim from the layer directory.
+file "/etc/pacman.conf" from="files/pacman.conf"
+
+// Inline content, templated. The triple-quoted string dedents automatically,
+// so the indentation that keeps this config readable does not end up in the
+// rendered file.
+file "/etc/makepkg.conf.d/99-local.conf" {
+    text """
+    #!/hint/bash
+    # Managed by lami -- a drop-in, so the package-owned /etc/makepkg.conf
+    # stays untouched and never produces a .pacnew.
+
+    MAKEFLAGS="-j{{ cpu_threads }}"
+
+    # The Arch default. Higher zstd levels cost hundreds of MB per thread and
+    # are orders of magnitude slower, for a package you unpack once.
+    COMPRESSZST=(zstd -c -T0 -)
+    """
+}
+
+file "/etc/hostname" {
+    text "{{ hostname }}"
+}
