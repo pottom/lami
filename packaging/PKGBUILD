@@ -1,0 +1,54 @@
+# Maintainer: pottom <basipottom@gmail.com>
+pkgname=lami
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Layered, declarative system configuration for Arch Linux"
+arch=('x86_64')
+url="https://github.com/pottom/lami"
+license=('MIT')
+
+# Deliberately none. lami shells out to pacman, systemctl and age rather than
+# linking any of them, so this package has no shared library dependency and
+# cannot be broken by a pacman ABI bump -- which matters, because it is the
+# tool you would reach for to repair such a break.
+depends=()
+
+# An AUR helper is only needed if a layer declares AUR packages, and lami says
+# so plainly when one is missing. age is only needed for encrypted sources.
+optdepends=(
+    'paru: install packages from the AUR'
+    'yay: install packages from the AUR'
+    'age: decrypt *.age source files'
+)
+
+makedepends=('cargo' 'git')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    # The tests that need root skip themselves when not run as root, so this
+    # is safe in a clean chroot.
+    cargo test --frozen
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 docs/guide.md "$pkgdir/usr/share/doc/$pkgname/guide.md"
+}
