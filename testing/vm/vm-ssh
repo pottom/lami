@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# ssh into the live install medium. Host key checking is off on purpose: the
+# guest is reinstalled from scratch and its key changes every time.
+d="$(dirname "${BASH_SOURCE[0]}")/run"
+exec ssh -p "${SSH_PORT:-2222}" -i "$d/key" \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o LogLevel=ERROR -o ForwardX11=no -o ConnectTimeout=5 \
+    root@127.0.0.1 "$@"

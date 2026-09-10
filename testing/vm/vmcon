@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Drive the test VM through its serial console.
+
+There is no ssh into the installed system until the config puts it there, so
+everything between the first boot and `lami apply` happens the way a person
+sitting at the machine would do it: at the console.
+
+    ./vmcon login [user] [password]
+    ./vmcon run "command"          -- runs it, streams the output, exits with
+                                     the command's own exit status
+"""
+import os
+import re
+import socket
+import sys
+import time
+
+SOCK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run", "serial.sock")
+
+
+def connect():
+    s = socket.socket(socket.AF_UNIX)
+    s.connect(SOCK)
+    s.settimeout(1.0)
+    return s
+
+
+def expect(s, pattern, timeout, echo=True):
+    """Read until pattern matches, returning everything read."""
+    rx = re.compile(pattern)
+    buf = ""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            chunk = s.recv(4096).decode("utf-8", "replace")
+        except socket.timeout:
+            continue
+        if not chunk:
+            break
+        if echo:
+            sys.stdout.write(chunk)
+            sys.stdout.flush()
+        buf += chunk
+        m = rx.search(buf)
+        if m:
+            return buf, m
+    return buf, None
+
+
+def send(s, text):
+    s.sendall(text.encode())
+
+
+def cmd_login(user, password):
+    s = connect()
+    send(s, "\n")
+    buf, m = expect(s, r"login:", 120)
+    if not m:
+        print("\n!! no login prompt", file=sys.stderr)
+        return 1
+    send(s, user + "\n")
+    buf, m = expect(s, r"[Pp]assword:", 30)
+    if not m:
+        print("\n!! no password prompt", file=sys.stderr)
+        return 1
+    send(s, password + "\n")
+    time.sleep(2)
+    # A shell prompt is themeable and unreliable to match; ask the shell to
+    # prove itself instead.
+    send(s, "echo LOGIN_$((6*7))_OK\n")
+    buf, m = expect(s, r"LOGIN_42_OK\s", 30)
+    return 0 if m else 1
+
+
+def cmd_run(command, timeout):
+    s = connect()
+    send(s, "\n")
+    time.sleep(0.5)
+    # The marker is written so the echoed command line cannot be mistaken for
+    # the result: the echo contains "$?", the output contains a number.
+    send(s, command + '; echo "__RC__"$?"__"\n')
+    buf, m = expect(s, r"__RC__(\d+)__", timeout)
+    if not m:
+        print("\n!! timed out", file=sys.stderr)
+        return 124
+    return int(m.group(1))
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(2)
+    if sys.argv[1] == "login":
+        user = sys.argv[2] if len(sys.argv) > 2 else "root"
+        pw = sys.argv[3] if len(sys.argv) > 3 else "root"
+        sys.exit(cmd_login(user, pw))
+    if sys.argv[1] == "run":
+        t = float(os.environ.get("VMCON_TIMEOUT", "300"))
+        sys.exit(cmd_run(sys.argv[2], t))
+    print(__doc__)
+    sys.exit(2)

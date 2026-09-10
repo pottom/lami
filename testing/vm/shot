@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Screenshot the VM.
+
+QEMU writes PPM; this converts it to PNG with nothing but the standard
+library, so looking at the guest's screen needs no image tooling installed.
+
+    ./shot            -> run/shot.png
+    ./shot greeter    -> run/greeter.png
+"""
+import os
+import struct
+import subprocess
+import sys
+import zlib
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+RUN = os.path.join(HERE, "run")
+name = sys.argv[1] if len(sys.argv) > 1 else "shot"
+ppm = os.path.join(RUN, name + ".ppm")
+png = os.path.join(RUN, name + ".png")
+
+subprocess.run([os.path.join(HERE, "qmon"), f"screendump {ppm}"], check=True)
+
+data = open(ppm, "rb").read()
+# P6 header: magic, width, height, maxval -- whitespace separated, # comments.
+parts, i = [], 0
+while len(parts) < 4:
+    while data[i:i + 1].isspace():
+        i += 1
+    if data[i:i + 1] == b"#":
+        while data[i:i + 1] != b"\n":
+            i += 1
+        continue
+    j = i
+    while not data[j:j + 1].isspace():
+        j += 1
+    parts.append(data[i:j])
+    i = j
+i += 1
+w, h = int(parts[1]), int(parts[2])
+px = data[i:i + w * h * 3]
+
+# One filter byte (0 = none) in front of every scanline is all PNG requires.
+raw = b"".join(b"\x00" + px[y * w * 3:(y + 1) * w * 3] for y in range(h))
+
+
+def chunk(tag, body):
+    c = tag + body
+    return struct.pack(">I", len(body)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+
+
+open(png, "wb").write(
+    b"\x89PNG\r\n\x1a\n"
+    + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+    + chunk(b"IDAT", zlib.compress(raw, 6))
+    + chunk(b"IEND", b"")
+)
+os.remove(ppm)
+print(f"{png}  ({w}x{h})")
