@@ -173,6 +173,35 @@ Use `from=` for anything you might tweak in place on a machine, and inline
 automatically, so the indentation keeping your config readable never reaches
 the file.
 
+#### Whole directories
+
+A config directory with a dozen files in it does not need a dozen lines:
+
+```kdl
+dir "~/.config/fish" from="files/home/.config/fish"
+```
+
+Every file under the source is declared as if you had written it out by hand,
+keeping its relative path. `lami why` and `capture` work on each of them
+individually, so nothing is lost by the shorthand.
+
+#### Suffixes carry meaning
+
+Two suffixes on a *source* file change what happens to it, and both are
+stripped from the target path:
+
+| Source | Target | What happens |
+|---|---|---|
+| `files/hyprland.conf` | `hyprland.conf` | copied verbatim |
+| `files/hyprland.conf.tmpl` | `hyprland.conf` | rendered with this host's parameters |
+| `files/ssh-config.age` | `ssh-config` | decrypted, and written `0600` |
+
+**Only `.tmpl` files are rendered.** A static file containing `{{` -- a shell
+script, a CSS file, a Jinja template you are managing as data -- would
+otherwise break, and `capture` would write the rendered output back over the
+template and destroy it. Making it a suffix means the decision is visible in
+the filename rather than inferred from the content.
+
 Ownership and mode come from the path, so you only write down exceptions:
 
 | Path | Default |
