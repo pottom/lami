@@ -1,4 +1,4 @@
-#![allow(dead_code)] // a config modell reszei a kovetkezo merfoldkohoz kellenek
+#![allow(dead_code)] // parts of the config model are for the next milestone
 
 mod cli;
 mod config;
@@ -14,10 +14,12 @@ use crate::cli::{Cli, Command};
 use crate::config::Config;
 use crate::error::Error;
 
-/// A config könyvtára: `--config-dir`, `LAMI_CONFIG_DIR`, végül `$XDG_CONFIG_HOME/lami`.
+/// The config directory: `--config-dir`, `LAMI_CONFIG_DIR`, then
+/// `$XDG_CONFIG_HOME/lami`.
 ///
-/// A home-ot NEM a `$HOME`-ból vesszük: sudo alatt az a hívó home-ja lehet
-/// (`env_keep` / `always_set_home`), és a tool rootként fog futni.
+/// The home directory is NOT taken from `$HOME`: under sudo that may still be
+/// the caller's home (`env_keep` / `always_set_home`), and this tool will run
+/// as root.
 fn config_dir(explicit: Option<PathBuf>) -> Result<PathBuf, Error> {
     if let Some(p) = explicit {
         return Ok(p);
@@ -31,9 +33,9 @@ fn config_dir(explicit: Option<PathBuf>) -> Result<PathBuf, Error> {
     Ok(home.join(".config").join("lami"))
 }
 
-/// A tényleges felhasználó home-ja a passwd-ből.
+/// The real user's home directory, from passwd.
 fn real_home() -> Result<PathBuf, Error> {
-    // sudo alatt a SUDO_UID az eredeti felhasználó; egyébként a sajátunk.
+    // Under sudo, SUDO_UID is the original user; otherwise it is ours.
     let uid: u32 = std::env::var("SUDO_UID")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -42,13 +44,13 @@ fn real_home() -> Result<PathBuf, Error> {
     let pw = unsafe { libc::getpwuid(uid) };
     if pw.is_null() {
         return Err(Error::Other(format!(
-            "nem találom a(z) {uid} uid-hoz tartozó felhasználót a passwd-ben"
+            "no passwd entry for uid {uid}"
         )));
     }
     let dir = unsafe { std::ffi::CStr::from_ptr((*pw).pw_dir) };
     Ok(PathBuf::from(
         dir.to_str()
-            .map_err(|_| Error::Other("a home útvonala nem érvényes UTF-8".into()))?,
+            .map_err(|_| Error::Other("home directory path is not valid UTF-8".into()))?,
     ))
 }
 
@@ -64,8 +66,8 @@ fn main() -> Result<()> {
 
     if !dir.is_dir() {
         return Err(Error::Other(format!(
-            "a config könyvtár nem létezik: {}\n\
-             Hozd létre, vagy add meg: lami --config-dir <út>",
+            "config directory does not exist: {}\n\
+             Create it, or point at another one: lami --config-dir <path>",
             dir.display()
         ))
         .into());
@@ -85,18 +87,18 @@ fn main() -> Result<()> {
 fn cmd_list(cfg: &Config) {
     println!("config: {}\n", cfg.dir.display());
 
-    println!("gépek:");
+    println!("hosts:");
     if cfg.hosts.is_empty() {
-        println!("  (egy sincs)");
+        println!("  (none)");
     }
     for h in cfg.hosts.values() {
         let desc = h.description.as_deref().unwrap_or("");
         println!("  {:<12} {}", h.name, desc);
     }
 
-    println!("\nrétegek:");
+    println!("\nlayers:");
     if cfg.layers.is_empty() {
-        println!("  (egy sincs)");
+        println!("  (none)");
     }
     for l in cfg.layers.values() {
         let desc = l.description.as_deref().unwrap_or("");
@@ -107,30 +109,30 @@ fn cmd_list(cfg: &Config) {
 fn cmd_show(cfg: &Config, host: String) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
 
-    println!("gép: {}", r.host.name);
+    println!("host: {}", r.host.name);
     if let Some(d) = &r.host.description {
         println!("     {d}");
     }
     println!("     {}", r.host.origin.display());
 
-    println!("\nparaméterek:");
+    println!("\nparameters:");
     for (k, v) in &r.host.params {
         println!("  {k:<14} {v}");
     }
 
-    println!("\nrétegek (feloldva, függőségi sorrendben):");
+    println!("\nlayers (resolved, in dependency order):");
     for l in &r.layers {
         let explicit = if r.host.layers.contains(&l.name) {
             ""
         } else {
-            "  (függőségként)"
+            "  (via needs)"
         };
         println!("  {:<12} {}{}", l.name, l.path.display(), explicit);
     }
 
-    println!("\nerőforrások erre a gépre:");
-    println!("  csomag         {}", r.packages().len());
-    println!("  szolgáltatás   {}", r.services().len());
+    println!("\nresources for this host:");
+    println!("  packages   {}", r.packages().len());
+    println!("  services   {}", r.services().len());
     Ok(())
 }
 
@@ -139,8 +141,8 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
 
     let mut found = false;
     for (kind, items) in [
-        ("csomag", r.packages()),
-        ("szolgáltatás", r.services()),
+        ("package", r.packages()),
+        ("service", r.services()),
     ] {
         for (layer, decl) in items {
             if decl.name != target {
@@ -148,40 +150,41 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
             }
             found = true;
             println!("{}  ({kind})", decl.name);
-            println!("  deklarálva:  {}", decl.origin);
-            print!("  azért kapod: a(z) '{}' réteg", layer.name);
+            println!("  declared:   {}", decl.origin);
+            print!("  applies:    layer '{}'", layer.name);
             if r.host.layers.contains(&layer.name) {
-                println!(" szerepel {} layers listájában", r.host.name);
+                println!(" is in {}'s layers list", r.host.name);
             } else {
-                println!(" a függőségi láncban van");
+                println!(" is pulled in via needs");
             }
             if let Some(c) = &decl.condition {
                 let val = r.host.param(&c.key).map(|v| v.to_string()).unwrap_or_default();
-                println!("  feltétel:    {} (a gépen: {} = {})", c, c.key, val);
+                println!("  condition:  {} (this host: {} = {})", c, c.key, val);
             }
             println!();
         }
     }
 
     if !found {
-        println!("'{target}' nincs deklarálva {} számára.", r.host.name);
-        println!("\nEllenőrizd a `lami show` kimenetét, vagy lehet, hogy más gép kapja csak.");
+        println!("'{target}' is not declared for {}.", r.host.name);
+        println!("\nCheck `lami show`, or it may only apply to another host.");
     }
     Ok(())
 }
 
-/// A config ellenőrzése a rendszer ellen.
+/// Check the config against the system.
 ///
-/// Ez pótolja azt, amit a külön `aur` blokk megszűnésével elvesztettünk: mivel
-/// a config nem mondja meg, mi jön az AUR-ból, ELLENŐRIZNI kell, hogy van-e
-/// AUR helper -- különben az apply csak a telepítésnél derítené ki.
+/// This makes up for what we lost when the separate `aur` block went away:
+/// since the config no longer states which packages come from the AUR, we have
+/// to CHECK that a helper is present -- otherwise apply would only find out at
+/// install time.
 fn cmd_check(cfg: &Config, host: String) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
-    println!("gép: {}\n", r.host.name);
+    println!("host: {}\n", r.host.name);
 
     if !pacman::available() {
-        println!("A pacman nem elérhető, a csomagellenőrzés kimarad.");
-        println!("(A lami Arch Linuxra készült; a config szerkezete így is ellenőrizve.)");
+        println!("pacman is not available, skipping the package check.");
+        println!("(lami targets Arch Linux; the config structure was still validated.)");
         return Ok(());
     }
 
@@ -191,37 +194,38 @@ fn cmd_check(cfg: &Config, host: String) -> Result<(), Error> {
     let (from_repo, unknown): (Vec<&str>, Vec<&str>) =
         declared.iter().partition(|p| sync.contains(**p));
 
-    println!("csomagok:");
-    println!("  repóból      {}", from_repo.len());
-    println!("  nem a repóból {}", unknown.len());
+    println!("packages:");
+    println!("  from repos   {}", from_repo.len());
+    println!("  not in repos {}", unknown.len());
 
     if unknown.is_empty() {
-        println!("\n✓ minden csomag elérhető a beállított repókból.");
+        println!("\nAll packages are available from the configured repositories.");
         return Ok(());
     }
 
     println!();
     match pacman::aur_helper() {
         Some(helper) => {
-            println!("Ezeket a(z) '{helper}' hozza az AUR-ból:");
+            println!("'{helper}' will fetch these from the AUR:");
             for p in &unknown {
                 println!("  {p}");
             }
             println!(
-                "\nMegjegyzés: ami elgépelés, az is ide kerül -- a lami nem kérdezi le\n\
-                 az AUR-t hálózat nélkül. A telepítéskor a(z) {helper} fog szólni."
+                "\nNote: a typo lands in this list too -- lami does not query the AUR\n\
+                 without network access. {helper} will tell you at install time."
             );
         }
         None => {
             let list = unknown.join(", ");
             return Err(Error::Other(format!(
-                "{} csomag nem érhető el a beállított repókból, és NINCS AUR helper telepítve:\n\
+                "{} package(s) are not available from the configured repositories,\n\
+                 and NO AUR helper is installed:\n\
                  \n  {}\n\
-                 \nHa AUR-os csomagok: telepíts egy helpert (paru, yay, pikaur, aura).\n\
-                 A forrásból épített paru ajánlott -- a paru-bin a pacman ABI-váltásakor\n\
-                 használhatatlanná válik, épp amikor javítanál vele:\n\
+                 \nIf they are AUR packages, install a helper (paru, yay, pikaur, aura).\n\
+                 Building paru from source is recommended -- paru-bin breaks on a pacman\n\
+                 ABI bump, exactly when you would need it to repair things:\n\
                  \n  git clone https://aur.archlinux.org/paru.git && cd paru && makepkg -si\n\
-                 \nHa elgépelés: javítsd a rétegfájlban. A `lami why <nev>` megmondja, hol van.",
+                 \nIf it is a typo, fix it in the layer file. `lami why <name>` shows where.",
                 unknown.len(),
                 list
             )));

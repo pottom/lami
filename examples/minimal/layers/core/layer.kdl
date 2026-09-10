@@ -1,4 +1,4 @@
-description "Alaprendszer: boot, fájlrendszer, hálózat"
+description "Base system: boot, filesystem, network"
 
 packages {
     base

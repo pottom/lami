@@ -1,12 +1,12 @@
-//! A `lami check` tesztjei.
+//! Tests for `lami check`.
 //!
-//! Ez a parancs potolja azt, amit a kulon `aur` blokk megszunesevel
-//! elvesztettunk: mivel a config nem mondja meg, mi jon az AUR-bol,
-//! ELLENORIZNI kell, hogy van-e AUR helper.
+//! This command makes up for what was lost when the separate `aur` block went
+//! away: since the config no longer states what comes from the AUR, we have to
+//! CHECK that an AUR helper is present.
 
 use std::process::Command;
 
-fn pacman_van() -> bool {
+fn has_pacman() -> bool {
     Command::new("pacman")
         .arg("--version")
         .output()
@@ -21,7 +21,7 @@ fn lami_path(path: Option<&str>, args: &[&str]) -> (String, bool) {
     if let Some(p) = path {
         cmd.env("PATH", p);
     }
-    let out = cmd.output().expect("a lami futtathato");
+    let out = cmd.output().expect("lami binary runs");
     (
         format!(
             "{}{}",
@@ -33,35 +33,35 @@ fn lami_path(path: Option<&str>, args: &[&str]) -> (String, bool) {
 }
 
 #[test]
-fn a_repobol_jovo_csomagokat_felismeri() {
-    if !pacman_van() {
-        eprintln!("nincs pacman, kihagyva");
+fn recognises_repo_packages() {
+    if !has_pacman() {
+        eprintln!("no pacman, skipping");
         return;
     }
-    // sam-nek nincs rice retege, tehat minden csomagja a repobol jon.
+    // sam has no rice layer, so every package of his comes from a repo.
     let (out, ok) = lami_path(None, &["--host", "sam", "check"]);
     assert!(ok, "{out}");
-    assert!(out.contains("nem a repóból 0"), "{out}");
+    assert!(out.contains("not in repos 0"), "{out}");
 }
 
 #[test]
-fn az_aur_csomagokat_elkuloniti() {
-    if !pacman_van() {
-        eprintln!("nincs pacman, kihagyva");
+fn separates_out_aur_packages() {
+    if !has_pacman() {
+        eprintln!("no pacman, skipping");
         return;
     }
     let (out, ok) = lami_path(None, &["--host", "frodo", "check"]);
-    assert!(ok, "van AUR helper a gepen, tehat sikerulnie kell:\n{out}");
+    assert!(ok, "this machine has an AUR helper, so it should succeed:\n{out}");
     assert!(out.contains("caelestia-shell"), "{out}");
 }
 
 #[test]
-fn aur_helper_nelkul_hibaval_all_meg() {
-    if !pacman_van() {
-        eprintln!("nincs pacman, kihagyva");
+fn errors_without_an_aur_helper() {
+    if !has_pacman() {
+        eprintln!("no pacman, skipping");
         return;
     }
-    // Csak a pacman legyen elerheto, AUR helper ne.
+    // Expose pacman only, no AUR helper.
     let tmp = std::env::temp_dir().join(format!("lami-test-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).unwrap();
     let link = tmp.join("pacman");
@@ -71,9 +71,9 @@ fn aur_helper_nelkul_hibaval_all_meg() {
     let (out, ok) = lami_path(Some(tmp.to_str().unwrap()), &["--host", "frodo", "check"]);
     std::fs::remove_dir_all(&tmp).ok();
 
-    assert!(!ok, "hibaval kell leallnia:\n{out}");
-    assert!(out.contains("NINCS AUR helper"), "{out}");
-    // A hibauzenet legyen cselekvesre keszteto, ne csak panasz.
-    assert!(out.contains("makepkg -si"), "adjon megoldast is:\n{out}");
-    assert!(out.contains("lami why"), "mutassa meg, hol javithato:\n{out}");
+    assert!(!ok, "must exit with an error:\n{out}");
+    assert!(out.contains("NO AUR helper"), "{out}");
+    // The error should be actionable, not just a complaint.
+    assert!(out.contains("makepkg -si"), "should offer a fix:\n{out}");
+    assert!(out.contains("lami why"), "should point at where to fix it:\n{out}");
 }

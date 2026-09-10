@@ -1,8 +1,8 @@
-//! Parancssori felület.
+//! Command line interface.
 //!
-//! Az első mérföldkőben MINDEN parancs csak olvas. Az `apply` szándékosan
-//! nincs itt: előbb a `diff` kimenetét kell hitelesíteni a jelenlegi
-//! metapac/decman/chezmoi hármas ellen.
+//! In this milestone every command is READ-ONLY. `apply` is deliberately
+//! absent: the `diff` output has to be validated against the existing
+//! metapac/decman/chezmoi setup before lami writes anything.
 
 use std::path::PathBuf;
 
@@ -11,15 +11,15 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(
     name = "lami",
-    about = "Rétegzett, deklaratív rendszerkonfiguráció Arch Linuxra",
+    about = "Layered, declarative system configuration for Arch Linux",
     version
 )]
 pub struct Cli {
-    /// A config könyvtára. Alapból: $XDG_CONFIG_HOME/lami
+    /// Config directory. Defaults to $XDG_CONFIG_HOME/lami
     #[arg(long, global = true, env = "LAMI_CONFIG_DIR")]
     pub config_dir: Option<PathBuf>,
 
-    /// Más gép profiljával fusson (teszteléshez).
+    /// Resolve as a different host (for testing).
     #[arg(long, global = true, env = "LAMI_HOST")]
     pub host: Option<String>,
 
@@ -29,19 +29,19 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// A gép feloldott profilja: rétegek, paraméterek.
+    /// Show this host's resolved profile: layers and parameters.
     Show,
 
-    /// Honnan jön egy erőforrás, és miért kapja ez a gép.
+    /// Explain where a resource comes from and why this host gets it.
     Why {
-        /// Csomag neve, szolgáltatás vagy fájl útvonala.
+        /// A package name or a service name.
         target: String,
     },
 
-    /// Az ismert gépek és rétegek listája.
+    /// List known hosts and layers.
     List,
 
-    /// A config ellenőrzése a rendszer ellen: van-e minden csomag, kell-e
-    /// AUR helper. Semmit nem módosít.
+    /// Check the config against the system: are all packages available, is an
+    /// AUR helper needed. Changes nothing.
     Check,
 }

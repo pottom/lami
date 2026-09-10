@@ -1,4 +1,4 @@
-description "Parancssori eszközök"
+description "Command line tools"
 needs "core"
 
 packages {
@@ -8,7 +8,7 @@ packages {
     eza
     btop
     ripgrep
-    rsync       // a lami capture-je is használja fájlmásoláshoz
+    rsync       // lami's own capture uses this to copy files
 }
 
 services {

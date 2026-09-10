@@ -1,4 +1,4 @@
-description "Működő Hyprland asztal"
+description "A working Hyprland desktop"
 needs "core"
 
 packages {
@@ -8,22 +8,22 @@ packages {
     greetd-regreet
     ghostty
     thunar
-    firefox     // a munkahelyi SSO miatt kell, ne cseréld chromiumra
+    firefox     // needed for work SSO, do not swap for chromium
 }
 
 services {
     greetd
-    power-profiles-daemon    // a caelestia-shell hard dependency-je
+    power-profiles-daemon    // hard dependency of caelestia-shell
 }
 
-// A GPU-tól függő rész. Ugyanaz a réteg, más driver.
+// The GPU-dependent part. Same layer everywhere, different driver.
 when gpu="intel" {
     packages { mesa; intel-media-driver; vulkan-intel }
 }
 
 when gpu="nvidia" {
-    // 2026: a sima "nvidia" csomag már nem létezik az Arch repókban,
-    // Blackwell (RTX 50xx) esetén az open modul kötelező.
+    // As of 2026 the plain "nvidia" package no longer exists in the Arch
+    // repositories, and Blackwell (RTX 50xx) requires the open modules.
     packages { nvidia-open; nvidia-utils; egl-wayland }
 }
 
@@ -31,12 +31,12 @@ when gpu="amd" {
     packages { mesa; vulkan-radeon; libva-mesa-driver }
 }
 
-// Csak akkor, ha van külső monitor DDC/CI-vel.
+// Only where there is an external monitor speaking DDC/CI.
 when ddc=on {
     packages { ddcutil }
 }
 
-// Laptopon a belső panel fényereje máshogy megy.
+// On a laptop the internal panel backlight works differently.
 when class="laptop" {
     packages { brightnessctl }
 }

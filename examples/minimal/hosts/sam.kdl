@@ -1,11 +1,10 @@
-description "Notebook"
+description "Laptop"
 
-layers "core" "tools" "gui"     // rice nincs -- és így egyetlen rice-fájlt sem kap
+layers "core" "tools" "gui"     // no rice -- so it gets none of its files
 
 gpu   "nvidia"
 ucode "amd"
 class "laptop"
 
 cpu-threads 16
-
-ddc off             // belső panel, ide brightnessctl való
+ddc   off           // internal panel; brightnessctl handles this instead

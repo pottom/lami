@@ -1,13 +1,13 @@
-description "Asztali gép, Gigabyte Z390 + i7-9700K"
+description "Desktop, Gigabyte Z390 + i7-9700K"
 
-// Ezeket a rétegeket kapja. A függőségeiket (needs) nem kell felsorolni,
-// azokat a lami hozzáveszi.
+// The layers this host gets. Their dependencies (`needs`) are added
+// automatically -- no need to list them here.
 layers "core" "tools" "gui" "rice"
 
-// Paraméterek. A rétegek `when` blokkjai ezekre hivatkoznak.
+// Parameters. The `when` blocks in layers refer to these.
 gpu   "intel"
 ucode "intel"
 class "desktop"
 
 cpu-threads 8
-ddc on              // külső monitor fényereje DDC/CI-n
+ddc   on            // external monitor brightness over DDC/CI

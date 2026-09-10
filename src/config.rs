@@ -1,11 +1,11 @@
-//! A config beolvasása és a gépprofil feloldása.
+//! Reading the config and resolving a host profile.
 //!
-//! Két fajta fájl:
-//!   hosts/<nev>.kdl        egy gép: mely rétegeket kapja, milyen paraméterekkel
-//!   layers/<nev>/layer.kdl egy réteg: csomagok, szolgáltatások, fájlok, hookok
+//! Two kinds of file:
+//!   hosts/<name>.kdl        a machine: which layers it gets, with what params
+//!   layers/<name>/layer.kdl a layer: packages, services, files, hooks
 //!
-//! Minden deklaráció megőrzi a forráshelyét (fájl + sor), hogy a `lami why`
-//! meg tudja mondani, honnan jön egy erőforrás.
+//! Every declaration keeps its source location (file + line) so that
+//! `lami why` can say where a resource comes from.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -16,7 +16,7 @@ use miette::NamedSource;
 
 use crate::error::{Error, Result};
 
-/// Honnan származik egy deklaráció. Ez a `lami why` alapja.
+/// Where a declaration came from. This is what `lami why` reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Origin {
     pub file: PathBuf,
@@ -29,8 +29,8 @@ impl std::fmt::Display for Origin {
     }
 }
 
-/// Egy gépprofil paramétere. Szándékosan kevés fajta: a config legyen olvasható,
-/// ne kifejező.
+/// A host profile parameter. Deliberately few kinds: the config should be
+/// readable, not expressive.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Str(String),
@@ -93,12 +93,12 @@ impl Host {
     }
 }
 
-/// Egy csomag-deklaráció a forráshelyével együtt.
+/// A single declaration together with where it was written.
 #[derive(Debug, Clone)]
 pub struct Decl {
     pub name: String,
     pub origin: Origin,
-    /// Ha feltételes blokkban van: pl. `gpu=intel`.
+    /// Set when declared inside a conditional block, e.g. `gpu=intel`.
     pub condition: Option<Condition>,
 }
 
@@ -141,7 +141,7 @@ fn named(path: &Path, src: &str) -> NamedSource<String> {
     NamedSource::new(path.display().to_string(), src.to_string()).with_language("kdl")
 }
 
-/// Egy node argumentumai stringként. `layers "a" "b"` -> ["a", "b"]
+/// A node's arguments as strings. `layers "a" "b"` -> ["a", "b"]
 fn args(node: &KdlNode) -> Vec<String> {
     node.entries()
         .iter()
@@ -155,7 +155,7 @@ fn args(node: &KdlNode) -> Vec<String> {
         .collect()
 }
 
-/// Egy node első argumentuma értékként.
+/// A node's single argument as a value.
 fn value_of(node: &KdlNode) -> Option<Value> {
     let a: Vec<&KdlValue> = node
         .entries()
@@ -164,17 +164,17 @@ fn value_of(node: &KdlNode) -> Option<Value> {
         .map(|e| e.value())
         .collect();
     match a.len() {
-        // Argumentum nélküli node = bekapcsolva. Rövidítés az `on`-ra.
+        // A node with no arguments means enabled. Shorthand for `on`.
         0 => Some(Value::Bool(true)),
         1 => Some(match a[0] {
-            // A KDL v2-ben a puszta `true` már nem szabad szó, `#true` kell --
-            // a `ddc #true` viszont csúnyább, mint a `ddc on`. Ezért az
-            // on/off a dokumentált forma, a `#true`/`#false` pedig működik,
-            // mert az a KDL natív alakja.
+            // In KDL v2 a bare `true` is no longer a keyword; you must write
+            // `#true`. But `ddc #true` reads worse than `ddc on`, so on/off is
+            // the documented spelling. `#true`/`#false` still work because
+            // that is KDL's native form.
             //
-            // Miért van egyáltalán `off`, ha a sor elhagyása is kikapcsolná:
-            // mert az `off` ÖNMAGÁT DOKUMENTÁLJA. Egy hiányzó sorból nem
-            // derül ki, hogy mérlegelted-e a dolgot, vagy csak elfelejtetted.
+            // Why have `off` at all, when omitting the line would also disable
+            // it: because `off` DOCUMENTS ITSELF. A missing line does not tell
+            // you whether the choice was considered or simply forgotten.
             KdlValue::String(s) if s == "on" => Value::Bool(true),
             KdlValue::String(s) if s == "off" => Value::Bool(false),
             KdlValue::String(s) => Value::Str(s.clone()),
@@ -186,12 +186,12 @@ fn value_of(node: &KdlNode) -> Option<Value> {
     }
 }
 
-/// A `packages { foo; bar }` és a `packages "foo" "bar"` alak is érvényes.
-/// A blokkos forma az elsődleges, mert ott lehet soronként kommentelni:
+/// Both `packages { foo; bar }` and `packages "foo" "bar"` are accepted.
+/// The block form is preferred because it allows a comment per line:
 ///
 /// ```kdl
 /// packages {
-///     firefox   // a munkahelyi SSO miatt kell
+///     firefox   // needed for work SSO
 /// }
 /// ```
 fn names_from(node: &KdlNode, src: &str, file: &Path, cond: Option<&Condition>) -> Vec<Decl> {
@@ -252,10 +252,10 @@ impl Host {
 
         if layers.is_empty() {
             return Err(Error::Config {
-                msg: format!("a(z) '{name}' gépnek nincs egyetlen rétege sem"),
+                msg: format!("host '{name}' declares no layers"),
                 src: named(path, &src),
                 span: (0, src.len().min(1)).into(),
-                label: "hiányzik a `layers` sor".into(),
+                label: "the `layers` line is missing".into(),
             });
         }
 
@@ -288,8 +288,8 @@ impl Layer {
     }
 }
 
-/// Rekurzívan begyűjti a deklarációkat. A `when` blokkokba lépve a feltételt
-/// továbbadja, hogy a `why` meg tudja mondani, MIÉRT jár egy csomag.
+/// Collects declarations recursively. Descending into a `when` block carries
+/// the condition along, so that `why` can explain WHY a package applies.
 fn collect(
     doc: &KdlDocument,
     src: &str,
@@ -303,11 +303,11 @@ fn collect(
                 layer.description = value_of(node).map(|v| v.to_string())
             }
             "needs" if cond.is_none() => layer.needs.extend(args(node)),
-            // Nincs kulon `aur` blokk. Az AUR-bol jovo csomagok ugyanugy
-            // `packages`-ben vannak: a paru maga dontí el, mit hoz a repobol
-            // es mit az AUR-bol, tehat a config irasakor ezt nem kell tudnod.
-            // A megkulonboztetes csak a megjeleniteshez kell, azt a `diff`
-            // kerdezi le a pacman sync adatbazisabol.
+            // There is no separate `aur` block. AUR packages live in the same
+            // `packages` list: paru decides for itself what comes from a repo
+            // and what from the AUR, so you need not track it while writing
+            // config. The distinction only matters for display, and `check`
+            // derives it from pacman's sync database.
             "packages" => layer
                 .packages
                 .extend(names_from(node, src, path, cond.as_ref())),
@@ -315,7 +315,7 @@ fn collect(
                 .services
                 .extend(names_from(node, src, path, cond.as_ref())),
             "when" => {
-                // `when gpu="nvidia" { ... }` -- pontosan egy property kell
+                // `when gpu="nvidia" { ... }` -- exactly one property
                 let props: Vec<(&str, &KdlValue)> = node
                     .entries()
                     .iter()
@@ -324,10 +324,10 @@ fn collect(
 
                 if props.len() != 1 {
                     return Err(Error::Config {
-                        msg: "a `when` pontosan egy feltételt vár".into(),
+                        msg: "`when` takes exactly one condition".into(),
                         src: named(path, src),
                         span: (node.span().offset(), node.span().len()).into(),
-                        label: "pl. `when gpu=\"nvidia\" { ... }`".into(),
+                        label: "e.g. `when gpu=\"nvidia\" { ... }`".into(),
                     });
                 }
                 let (key, val) = props[0];
@@ -342,7 +342,7 @@ fn collect(
                     collect(children, src, path, Some(inner), layer)?;
                 }
             }
-            _ => { /* file / on-change: a következő mérföldkő */ }
+            _ => { /* file / on-change: next milestone */ }
         }
     }
     Ok(())
@@ -350,7 +350,7 @@ fn collect(
 
 // ---------------------------------------------------------------------------
 
-/// A teljes beolvasott config: minden gép és minden réteg.
+/// The whole parsed config: every host and every layer.
 #[derive(Debug)]
 pub struct Config {
     pub dir: PathBuf,
@@ -408,15 +408,15 @@ impl Config {
         })
     }
 
-    /// A gép feloldása: a `layers` lista + a `needs` függőségek tranzitív lezártja.
+    /// Resolve a host: its `layers` list plus the transitive closure of `needs`.
     ///
-    /// Ismeretlen gépnév esetén HIBA, nem default profil. Egy elgépelt hostname
-    /// vagy egy friss VM ne kaphasson csendben rossz konfigurációt.
+    /// An unknown host name is an ERROR, never a default profile. A typo'd
+    /// hostname or a fresh VM must not silently receive the wrong config.
     pub fn resolve(&self, name: &str) -> Result<Resolved<'_>> {
         let host = self.hosts.get(name).ok_or_else(|| Error::UnknownHost {
             name: name.to_string(),
             known: if self.hosts.is_empty() {
-                "(egy sincs)".into()
+                "(none)".into()
             } else {
                 self.hosts.keys().cloned().collect::<Vec<_>>().join(", ")
             },
@@ -431,7 +431,7 @@ impl Config {
             host,
             layers: ordered
                 .iter()
-                .map(|n| self.layers.get(n).expect("ellenőrizve"))
+                .map(|n| self.layers.get(n).expect("checked during expand"))
                 .collect(),
         })
     }
@@ -449,7 +449,7 @@ impl Config {
                 span: (off, name.len()).into(),
             }
         })?;
-        // A függőségek előbb, hogy a sorrend determinisztikus legyen.
+        // Dependencies first, so the order is deterministic.
         for dep in &layer.needs {
             self.expand(dep, host, out)?;
         }
@@ -460,7 +460,7 @@ impl Config {
     }
 }
 
-/// Egy konkrét gépre feloldott config.
+/// The config resolved for one specific host.
 #[derive(Debug)]
 pub struct Resolved<'a> {
     pub host: &'a Host,
@@ -468,13 +468,13 @@ pub struct Resolved<'a> {
 }
 
 impl Resolved<'_> {
-    /// Igaz-e a feltétel erre a gépre.
+    /// Whether the condition holds for this host.
     fn matches(&self, cond: &Option<Condition>) -> bool {
         match cond {
             None => true,
             Some(c) => self.host.param(&c.key).is_some_and(|v| match v {
-                // A logikai értékeket normalizáljuk, hogy a `when ddc=on` és a
-                // `when ddc=#true` is ugyanazt jelentse.
+                // Normalize booleans so that `when ddc=on` and
+                // `when ddc=#true` mean the same thing.
                 Value::Bool(b) => matches!(
                     (b, c.value.as_str()),
                     (true, "on" | "true" | "yes") | (false, "off" | "false" | "no")
@@ -484,7 +484,7 @@ impl Resolved<'_> {
         }
     }
 
-    /// A gépre ténylegesen érvényes csomagok, rétegsorrendben.
+    /// The packages that actually apply to this host, in layer order.
     pub fn packages(&self) -> Vec<(&Layer, &Decl)> {
         self.select(|l| &l.packages)
     }

@@ -1,8 +1,8 @@
-//! A gépfeloldás integrációs tesztjei az examples/minimal configon.
+//! Integration tests for host resolution against examples/minimal.
 //!
-//! A fixture szándékosan NEM a szerző személyes configja: stabilnak és
-//! hardverfüggetlennek kell lennie, különben a tesztek egy külső
-//! hozzájárulónál elhasalnak.
+//! The fixture is deliberately NOT the author's personal config: it has to be
+//! stable and hardware independent, or the tests would fail for any outside
+//! contributor.
 
 use std::path::Path;
 use std::process::Command;
@@ -13,7 +13,7 @@ fn lami(args: &[&str]) -> (String, bool) {
         .args(["--config-dir", "examples/minimal"])
         .args(args)
         .output()
-        .expect("a lami futtatható");
+        .expect("lami binary runs");
     (
         format!(
             "{}{}",
@@ -25,69 +25,69 @@ fn lami(args: &[&str]) -> (String, bool) {
 }
 
 #[test]
-fn a_fixture_letezik() {
+fn fixture_exists() {
     assert!(Path::new("examples/minimal/hosts/frodo.kdl").is_file());
 }
 
 #[test]
-fn a_needs_fuggosegek_feloldodnak() {
-    // A rice needs gui, a gui needs core -- a sam layers listajaban
-    // viszont csak core, tools, gui van.
+fn needs_dependencies_are_resolved() {
+    // rice needs gui, gui needs core -- but sam's layers list only has
+    // core, tools and gui.
     let (out, ok) = lami(&["--host", "sam", "show"]);
     assert!(ok, "{out}");
     assert!(out.contains("core"), "{out}");
     assert!(out.contains("gui"), "{out}");
-    assert!(!out.contains("rice"), "sam nem kaphat rice reteget:\n{out}");
+    assert!(!out.contains("rice"), "sam must not receive the rice layer:\n{out}");
 }
 
 #[test]
-fn a_retegkapu_mukodik() {
-    // Ez a teszt letezesenek oka: a korabbi chezmoi-alapu setupban a
-    // rice-fajlok minden gepre felkerultek, mert a chezmoinak nincs
-    // retegfogalma. Itt nem szabad, hogy megtortenjen.
+fn layer_gating_works() {
+    // Why this test exists: in the previous chezmoi-based setup the rice
+    // files landed on every machine, because chezmoi has no concept of
+    // layers. That must not happen here.
     let (sam, _) = lami(&["--host", "sam", "why", "caelestia-shell"]);
-    assert!(sam.contains("nincs deklaralva") || sam.contains("nincs deklarálva"), "{sam}");
+    assert!(sam.contains("is not declared"), "{sam}");
 
     let (frodo, _) = lami(&["--host", "frodo", "why", "caelestia-shell"]);
-    assert!(frodo.contains("rice"), "frodo megkapja a rice-t:\n{frodo}");
+    assert!(frodo.contains("rice"), "frodo does get rice:\n{frodo}");
 }
 
 #[test]
-fn a_gpu_feltetel_szetvalasztja_a_gepeket() {
+fn the_gpu_condition_separates_hosts() {
     let (frodo, _) = lami(&["--host", "frodo", "why", "intel-media-driver"]);
     assert!(frodo.contains("gpu=intel"), "{frodo}");
 
     let (sam, _) = lami(&["--host", "sam", "why", "intel-media-driver"]);
-    assert!(sam.contains("nincs dekl"), "sam NVIDIA-s, nem kaphat iHD-t:\n{sam}");
+    assert!(sam.contains("is not declared"), "sam is NVIDIA, must not get iHD:\n{sam}");
 
     let (sam_nv, _) = lami(&["--host", "sam", "why", "nvidia-open"]);
     assert!(sam_nv.contains("gpu=nvidia"), "{sam_nv}");
 }
 
 #[test]
-fn az_on_off_kapcsolo_mukodik() {
-    // A KDL v2-ben a puszta `true` mar nem szabad szo (`#true` kell), a
-    // `ddc #true` viszont csunyabb, mint a `ddc on`.
+fn the_on_off_switch_works() {
+    // In KDL v2 a bare `true` is no longer a keyword (`#true` is required),
+    // but `ddc #true` reads worse than `ddc on`.
     //
-    // Az `off` azert letezik, mert ONMAGAT DOKUMENTALJA: a sor elhagyasa is
-    // kikapcsolna, de abbol nem derul ki, hogy merlegelted-e.
+    // `off` exists because it DOCUMENTS ITSELF: omitting the line would also
+    // disable it, but then you cannot tell whether it was considered.
     let (frodo, _) = lami(&["--host", "frodo", "why", "ddcutil"]);
     assert!(frodo.contains("ddc=on"), "{frodo}");
 
     let (sam, _) = lami(&["--host", "sam", "why", "ddcutil"]);
-    assert!(sam.contains("nincs dekl"), "sam-en ddc off van:\n{sam}");
+    assert!(sam.contains("is not declared"), "sam has ddc off:\n{sam}");
 
-    // A show a configgal egyezo alakban irja ki, nem true/false-kent.
+    // `show` prints it the way the config spells it, not as true/false.
     let (show, _) = lami(&["--host", "sam", "show"]);
     assert!(show.contains("ddc            off"), "{show}");
 }
 
 #[test]
-fn ismeretlen_gep_hibaval_all_meg() {
-    // Nincs default profil: egy elgepelt hostname vagy egy friss VM ne
-    // kaphasson csendben rossz konfiguraciot.
+fn an_unknown_host_is_an_error() {
+    // There is no default profile: a typo'd hostname or a fresh VM must not
+    // silently receive the wrong configuration.
     let (out, ok) = lami(&["--host", "nemletezik", "show"]);
-    assert!(!ok, "hibaval kell leallnia:\n{out}");
+    assert!(!ok, "must exit with an error:\n{out}");
     assert!(out.contains("nemletezik"), "{out}");
-    assert!(out.contains("frodo"), "sorolja fel az ismert gepeket:\n{out}");
+    assert!(out.contains("frodo"), "should list the known hosts:\n{out}");
 }

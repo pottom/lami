@@ -1,29 +1,29 @@
-//! A rendszer csomagállapotának lekérdezése.
+//! Querying the system's package state.
 //!
-//! Szándékosan SHELL-OUT, nem libalpm-kötés. A paru köti, és amikor a pacman
-//! 7.1 a libalpm 16-ra váltott (2025-12), a paru öt hétig egyáltalán nem
-//! fordult. Egy konfigurációkezelő toolnál ez különösen rossz: pont az az
-//! eszköz esne ki, amivel javítanál. Cserébe a lami csomagjának nincs
-//! megosztott könyvtár függősége.
+//! Deliberately shells out instead of linking libalpm. paru links it, and when
+//! pacman 7.1 moved to libalpm 16 (December 2025) paru would not even compile
+//! for five weeks. For a configuration management tool that is uniquely bad:
+//! the casualty would be the very tool you reach for to repair the system.
+//! In exchange, lami's package has no shared library dependency at all.
 
 use std::collections::BTreeSet;
 use std::process::Command;
 
 use crate::error::{Error, Result};
 
-/// Az ismert AUR helperek, preferencia-sorrendben.
+/// Known AUR helpers, in order of preference.
 const AUR_HELPERS: &[&str] = &["paru", "yay", "pikaur", "aura"];
 
 fn run(bin: &str, args: &[&str]) -> Result<String> {
     let out = Command::new(bin).args(args).output().map_err(|e| {
         Error::Other(format!(
-            "a(z) '{bin}' nem futtatható: {e}\n\
-             A lami Arch Linuxra készült, és a pacman jelenlétét feltételezi."
+            "cannot run '{bin}': {e}\n\
+             lami targets Arch Linux and expects pacman to be present."
         ))
     })?;
     if !out.status.success() {
         return Err(Error::Other(format!(
-            "'{bin} {}' hibával tért vissza:\n{}",
+            "'{bin} {}' failed:\n{}",
             args.join(" "),
             String::from_utf8_lossy(&out.stderr).trim()
         )));
@@ -31,7 +31,8 @@ fn run(bin: &str, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Elérhető-e egyáltalán a pacman. Példa-config böngészéséhez nem kell.
+/// Whether pacman is available at all. Browsing an example config does not
+/// require it.
 pub fn available() -> bool {
     which("pacman").is_some()
 }
@@ -47,10 +48,10 @@ fn which(bin: &str) -> Option<String> {
     None
 }
 
-/// Minden csomagnév, ami elérhető a beállított sync repókból.
+/// Every package name available from the configured sync repositories.
 ///
-/// Ebből derül ki, mi jön a repóból és mi az AUR-ból -- ezért nincs külön
-/// `aur` blokk a configban.
+/// This is how lami tells repo packages from AUR packages, which is why the
+/// config has no separate `aur` block.
 pub fn sync_packages() -> Result<BTreeSet<String>> {
     Ok(run("pacman", &["-Slq"])?
         .lines()
@@ -59,10 +60,11 @@ pub fn sync_packages() -> Result<BTreeSet<String>> {
         .collect())
 }
 
-/// A gépre EXPLICIT telepített csomagok.
+/// Packages installed EXPLICITLY on this machine.
 ///
-/// Szándékosan `-Qqe` és nem `-Qq`: egy csak függőségként fent lévő csomag
-/// "hiányzik", mert ha a húzó csomag eltűnik, az orphan-takarítás elviszi.
+/// `-Qqe` rather than `-Qq` on purpose: a package present only as a dependency
+/// counts as missing, because an orphan sweep will take it away as soon as
+/// whatever pulled it in disappears.
 pub fn explicit_packages() -> Result<BTreeSet<String>> {
     Ok(run("pacman", &["-Qqe"])?
         .lines()
@@ -71,7 +73,7 @@ pub fn explicit_packages() -> Result<BTreeSet<String>> {
         .collect())
 }
 
-/// A telepített AUR helper neve, ha van.
+/// The installed AUR helper, if any.
 pub fn aur_helper() -> Option<&'static str> {
     AUR_HELPERS.iter().copied().find(|h| which(h).is_some())
 }

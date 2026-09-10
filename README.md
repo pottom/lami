@@ -1,40 +1,41 @@
 # lami
 
-Rétegzett, deklaratív rendszerkonfiguráció Arch Linuxra — csomagok, `/etc`,
-systemd unitok és dotfile-ok **egy** eszközzel, **egy** configgal.
+Layered, declarative system configuration for Arch Linux — packages, `/etc`,
+systemd units and dotfiles through **one** tool and **one** config.
 
-> **Állapot: korai fejlesztés.** Jelenleg csak olvasó parancsok működnek
-> (`list`, `show`, `why`). Semmit nem ír a rendszeredre.
+> **Status: early development.** Only read-only commands work today
+> (`list`, `show`, `why`, `check`). Nothing is written to your system.
 
-## Miért
+## Why
 
-Ha több Arch gépet tartasz hasonlóan, ma három eszközt kell összeragasztanod:
-egyet a csomagokra, egyet a `/etc`-re, egyet a dotfile-okra. Mindegyiknek saját
-config-nyelve, saját „mi változott" fogalma, és egyiknek sincs rendes válasza
-arra, hogy **hogyan szívd vissza** a gépen élőben elvégzett beállítást.
+If you keep several Arch machines alike, today you have to glue together three
+tools: one for packages, one for `/etc`, one for dotfiles. Each has its own
+config language, its own notion of "what changed", and none of them has a good
+answer to the question that matters most in practice: **how do you pull back a
+change you made live on the machine?**
 
-A `lami` egyetlen modellre húzza mindezt: minden **erőforrás** (csomag, fájl,
-szolgáltatás), és mindegyikre ugyanaz az életciklus érvényes — feloldás,
-összehasonlítás, alkalmazás, **visszaszívás**.
+lami puts all of it behind one model. Everything is a **resource** — a package,
+a file, a service — and every resource has the same lifecycle: resolve, diff,
+apply, **capture**.
 
-## A config
+## The config
 
-Egy réteg = egy könyvtár, egy fájllal. Felülről lefelé olvasható:
+One layer is one directory with one file, readable top to bottom:
 
 ```kdl
 // layers/gui/layer.kdl
-description "Működő Hyprland asztal"
+description "A working Hyprland desktop"
 needs "core"
 
 packages {
     hyprland
     greetd
-    firefox     // a munkahelyi SSO miatt kell, ne cseréld chromiumra
+    firefox     // needed for work SSO, do not swap for chromium
 }
 
 services {
     greetd
-    power-profiles-daemon    // a caelestia-shell hard dependency-je
+    power-profiles-daemon    // hard dependency of caelestia-shell
 }
 
 when gpu="nvidia" {
@@ -42,82 +43,83 @@ when gpu="nvidia" {
 }
 ```
 
-**Az AUR-os csomagoknak nincs külön blokkjuk.** Ugyanabban a `packages` listában
-vannak, és a lami a pacman sync adatbázisából tudja, mi jön honnan — a config
-írásakor ezt nem kell fejben tartanod.
+**AUR packages have no separate block.** They live in the same `packages` list;
+lami reads pacman's sync database to tell where a package comes from, so you do
+not have to keep track of it while writing config.
 
-Cserébe a lami **ellenőrzi**, hogy van-e AUR helper, ha kell:
-
-```
-$ lami check
-csomagok:
-  repóból      29
-  nem a repóból 3
-
-Ezeket a(z) 'paru' hozza az AUR-ból:
-  caelestia-shell
-  ...
-```
-
-AUR helper nélkül ez hibával áll meg, mielőtt bármi telepítés indulna — és
-megmondja, hogyan javítsd.
-
-Egy gép azt mondja meg, mely rétegeket kapja és milyen paraméterekkel:
+A host says which layers it gets, and with what parameters:
 
 ```kdl
 // hosts/frodo.kdl
-description "Asztali gép"
+description "Desktop"
 
 layers "core" "tools" "gui" "rice"
 
 gpu   "intel"
 ucode "intel"
 class "desktop"
-ddc   on            // külső monitor fényereje DDC/CI-n
+ddc   on            // external monitor brightness over DDC/CI
 ```
 
-A kapcsolók `on` / `off` alakúak. Az `off`-nak azért van értelme, holott a sor
-elhagyása is kikapcsolná: **önmagát dokumentálja**. Egy hiányzó sorból nem derül
-ki, hogy mérlegelted-e a dolgot, vagy csak elfelejtetted.
+The same `gui` layer runs on an Intel iGPU and on an RTX 5080 — only the `gpu`
+parameter differs.
 
-Ugyanaz a `gui` réteg fut Intel iGPU-n és RTX 5080-on — csak a `gpu` paraméter más.
+Switches are spelled `on` / `off`. `off` is worth having even though omitting
+the line would also disable the feature, because **it documents itself**: a
+missing line does not tell you whether the choice was considered or forgotten.
 
-## Eredetkövetés
+## Provenance
 
-Minden erőforrás megmondja, honnan jön és miért kapja ez a gép:
+Every resource can say where it came from and why this host gets it:
 
 ```
 $ lami why nvidia-open
-nvidia-open  (csomag)
-  deklarálva:  layers/gui/layer.kdl:24
-  azért kapod: a(z) 'gui' réteg szerepel sam layers listájában
-  feltétel:    gpu=nvidia (a gépen: gpu = nvidia)
+nvidia-open  (package)
+  declared:   layers/gui/layer.kdl:24
+  applies:    layer 'gui' is in sam's layers list
+  condition:  gpu=nvidia (this host: gpu = nvidia)
 ```
 
-## Kipróbálás
+## Checking
+
+```
+$ lami check
+packages:
+  from repos   29
+  not in repos 3
+
+'paru' will fetch these from the AUR:
+  caelestia-shell
+  ...
+```
+
+Without an AUR helper this exits with an error before anything is installed,
+and tells you how to fix it.
+
+## Trying it out
 
 ```sh
 cargo build
 ./target/debug/lami --config-dir examples/minimal list
-./target/debug/lami --config-dir examples/minimal --host frodo check
 ./target/debug/lami --config-dir examples/minimal --host frodo show
+./target/debug/lami --config-dir examples/minimal --host frodo check
 ./target/debug/lami --config-dir examples/minimal --host sam why nvidia-open
 ```
 
-A config helye alapból `$XDG_CONFIG_HOME/lami`; `--config-dir` vagy
-`LAMI_CONFIG_DIR` felülbírálja.
+The config directory defaults to `$XDG_CONFIG_HOME/lami`; `--config-dir` or
+`LAMI_CONFIG_DIR` overrides it.
 
-## Tervezési elvek
+## Design principles
 
-- **A config érthetősége az első.** A jogosultság az útból következik, a
-  `.service` suffixet kitaláljuk, a rövid tartalom helyben van, a feltétel
-  mondatként olvasható.
-- **Arch-only, vállaltan.** pacman, AUR, systemd, mkinitcpio beépítve — nem
-  absztrakció mögött.
-- **Ne köss, hívj.** Nem linkeljük a libalpm-et: amikor a pacman ABI-t vált, ne
-  pont az az eszköz essen ki, amivel javítanál.
-- **Az `apply` sosem töröl.** Az eltávolítás külön parancs, külön megerősítéssel.
+- **The config comes first.** Permissions follow from the path, the `.service`
+  suffix is inferred, short content lives inline, conditions read as sentences.
+- **Arch only, on purpose.** pacman, the AUR, systemd and mkinitcpio are built
+  in rather than hidden behind an abstraction.
+- **Call, don't link.** lami does not link libalpm: when pacman changes its ABI,
+  the tool you need to repair the system should not be the casualty.
+- **`apply` never removes.** Removal is a separate command with its own
+  confirmation.
 
-## Licenc
+## License
 
 MIT

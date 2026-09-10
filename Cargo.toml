@@ -3,19 +3,19 @@ name = "lami"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.95"
-description = "Rétegzett, deklaratív rendszerkonfiguráció Arch Linuxra"
+description = "Layered, declarative system configuration for Arch Linux"
 license = "MIT"
 repository = "https://github.com/pottom/lami"
 categories = ["command-line-utilities"]
 keywords = ["arch", "linux", "configuration", "dotfiles", "pacman"]
 
 [dependencies]
-# A KDL parser. PONTOS pin: a kommentőrző round-trip a capture alapja, és a
-# crate vékony (egy karbantartó, nincs alternatíva). Verziófrissítés csak
-# a round-trip snapshot tesztek átnézésével.
+# The KDL parser. EXACT pin on purpose: comment-preserving round-trip is what
+# `capture` is built on, and the crate is thin (one maintainer, no alternative
+# implementation). Only bump this alongside a review of the round-trip tests.
 kdl = "=6.7.1"
 
-# Hibadiagnosztika forrás-idézéssel. A kdl már implementálja a traitet.
+# Diagnostics with source quoting. The kdl crate already implements the trait.
 miette = { version = "7", features = ["fancy"] }
 thiserror = "2"
 

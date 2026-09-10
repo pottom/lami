@@ -1,9 +1,9 @@
-//! Hibatípusok forrás-hivatkozással.
+//! Error types with source references.
 //!
-//! A cél, hogy minden hiba megmondja, a config MELYIK SORÁBAN van a baj.
-//! A `kdl` crate `miette::Diagnostic`-ot implementál, ezért a parse-hibák
-//! ingyen kapnak caret-es idézést; a szemantikai hibáinkhoz mi tesszük hozzá
-//! a span-t.
+//! The goal: every error should point at the exact line of config that is
+//! wrong. The `kdl` crate implements `miette::Diagnostic`, so parse errors get
+//! caret-annotated source quoting for free; we attach spans to our own
+//! semantic errors.
 
 use std::path::PathBuf;
 
@@ -12,7 +12,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error, Diagnostic)]
 pub enum Error {
-    #[error("nem olvasható: {path}")]
+    #[error("cannot read {path}")]
     #[diagnostic(code(lami::io))]
     Io {
         path: PathBuf,
@@ -24,20 +24,20 @@ pub enum Error {
     #[diagnostic(transparent)]
     Kdl(#[from] kdl::KdlError),
 
-    #[error("'{name}' nincs a hosts/ könyvtárban")]
+    #[error("no host named '{name}'")]
     #[diagnostic(
         code(lami::unknown_host),
-        help("ismert gépek: {known}\nvedd fel a hosts/{name}.kdl fájlt, vagy teszteléshez: lami --host <nev> ...")
+        help("known hosts: {known}\nadd hosts/{name}.kdl, or use `lami --host <name>` to test another profile")
     )]
     UnknownHost { name: String, known: String },
 
-    #[error("a(z) '{layer}' réteg nem létezik")]
+    #[error("layer '{layer}' does not exist")]
     #[diagnostic(code(lami::unknown_layer))]
     UnknownLayer {
         layer: String,
         #[source_code]
         src: NamedSource<String>,
-        #[label("itt hivatkozol rá")]
+        #[label("referenced here")]
         span: SourceSpan,
     },
 
