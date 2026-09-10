@@ -309,6 +309,11 @@ packages:
 Without an AUR helper this exits with an error before anything is installed,
 and tells you how to fix it.
 
+## Guide
+
+[docs/guide.md](docs/guide.md) walks through it in about fifteen minutes,
+without writing anything until you ask.
+
 ## Trying it out
 
 ```sh
