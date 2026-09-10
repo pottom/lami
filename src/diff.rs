@@ -35,59 +35,108 @@ pub enum Change {
 }
 
 impl Change {
-    pub fn line(&self) -> String {
-        use crate::color::{action, added, changed, dim};
+    /// Which section this belongs under.
+    pub fn kind(&self) -> &'static str {
         match self {
-            Change::InstallPackage { name, layer } => format!(
-                "{} {}  {}",
-                added("+ package"),
-                name,
-                dim(&format!("[{layer}]"))
-            ),
-            Change::EnableService {
-                unit,
-                layer,
-                current,
-            } => format!(
-                "{} {}  {}",
-                added("+ service"),
-                unit,
-                dim(&format!("[{layer}]  (now: {current})"))
-            ),
-            Change::CreateFile { path, layer } => format!(
-                "{} {}  {}",
-                added("+ file   "),
-                path,
-                dim(&format!("[{layer}]"))
-            ),
-            Change::UpdateFile { path, layer } => format!(
-                "{} {}  {}",
-                changed("~ file   "),
-                path,
-                dim(&format!("[{layer}]"))
-            ),
-            Change::FixPermissions {
-                path,
-                layer,
-                want,
-                have,
-            } => format!(
-                "{} {}  {}",
-                changed("~ perms  "),
-                path,
-                dim(&format!("[{layer}]  {have} -> {want}"))
-            ),
-            Change::RunHook {
-                run,
-                layer,
-                because,
-            } => format!(
-                "{} {}  {}",
-                action("> run    "),
-                run,
-                dim(&format!("[{layer}]  (because {because} changes)"))
-            ),
+            Change::InstallPackage { .. } => "packages",
+            Change::EnableService { .. } => "services",
+            Change::CreateFile { .. }
+            | Change::UpdateFile { .. }
+            | Change::FixPermissions { .. } => "files",
+            Change::RunHook { .. } => "hooks",
         }
+    }
+
+    /// What would happen, as a verb. The verb carries the meaning, so the
+    /// output reads the same without colour -- which matters more than usual
+    /// here, because a themed terminal may render "green" as anything at all.
+    pub fn verb(&self) -> &'static str {
+        match self {
+            Change::InstallPackage { .. } => "install",
+            Change::EnableService { .. } => "enable",
+            Change::CreateFile { .. } => "create",
+            Change::UpdateFile { .. } => "write",
+            Change::FixPermissions { .. } => "chmod",
+            Change::RunHook { .. } => "run",
+        }
+    }
+
+    /// What the change acts on.
+    pub fn subject(&self) -> String {
+        match self {
+            Change::InstallPackage { name, .. } => name.clone(),
+            Change::EnableService { unit, .. } => unit.clone(),
+            Change::CreateFile { path, .. }
+            | Change::UpdateFile { path, .. }
+            | Change::FixPermissions { path, .. } => path.clone(),
+            Change::RunHook { run, .. } => run.clone(),
+        }
+    }
+
+    /// Why this counts as a change: the machine's current state, in words.
+    pub fn reason(&self) -> String {
+        match self {
+            Change::InstallPackage { layer, .. } => {
+                format!("declared in {layer}, not installed")
+            }
+            Change::EnableService { layer, current, .. } => {
+                format!("declared in {layer}, currently {current}")
+            }
+            Change::CreateFile { layer, .. } => format!("from {layer}, does not exist yet"),
+            Change::UpdateFile { layer, .. } => format!("from {layer}, content differs"),
+            Change::FixPermissions {
+                layer, want, have, ..
+            } => format!("from {layer}, mode is {have}, should be {want}"),
+            Change::RunHook { because, .. } => format!("because {because} changes"),
+        }
+    }
+
+    fn paint(&self, s: &str) -> String {
+        use crate::color::{action, added, changed};
+        match self {
+            Change::InstallPackage { .. }
+            | Change::EnableService { .. }
+            | Change::CreateFile { .. } => added(s),
+            Change::UpdateFile { .. } | Change::FixPermissions { .. } => changed(s),
+            Change::RunHook { .. } => action(s),
+        }
+    }
+
+    /// One aligned line: verb, subject, reason.
+    pub fn line(&self, width: usize) -> String {
+        let subject = self.subject();
+        format!(
+            "  {:<8} {:<width$}  {}",
+            self.paint(self.verb()),
+            subject,
+            crate::color::dim(&self.reason()),
+            width = width
+        )
+    }
+}
+
+/// Print a report grouped by kind, so like things line up together.
+pub fn print(changes: &[Change]) {
+    // A minimum width so the reason column stays put even with a single short
+    // entry -- otherwise the subject and its explanation run together and
+    // there is nothing for the eye to follow down.
+    let width = changes
+        .iter()
+        .map(|c| c.subject().chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(24, 48);
+
+    let mut last = "";
+    for c in changes {
+        if c.kind() != last {
+            if !last.is_empty() {
+                println!();
+            }
+            println!("{}", crate::color::bold(c.kind()));
+            last = c.kind();
+        }
+        println!("{}", c.line(width));
     }
 }
 
@@ -136,7 +185,7 @@ pub fn compute(
     user: &str,
     settings: &crate::config::Settings,
 ) -> Result<Report> {
-    let mut changes = Vec::new();
+    let mut changes: Vec<Change> = Vec::new();
     let mut undeclared_packages = Vec::new();
     let mut skipped = Vec::new();
 
@@ -232,6 +281,14 @@ pub fn compute(
             });
         }
     }
+
+    // Group by kind so the output reads in sections rather than as a jumble.
+    changes.sort_by_key(|c| match c.kind() {
+        "packages" => 0,
+        "files" => 1,
+        "services" => 2,
+        _ => 3,
+    });
 
     Ok(Report {
         changes,

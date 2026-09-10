@@ -124,10 +124,12 @@ pub fn run_apply(
         return Ok(0);
     }
 
-    println!("{} change(s):\n", report.changes.len());
-    for c in &report.changes {
-        println!("  {}", c.line());
-    }
+    let n = report.changes.len();
+    println!(
+        "{}\n",
+        crate::color::dim(&format!("{n} change{}:", if n == 1 { "" } else { "s" }))
+    );
+    crate::diff::print(&report.changes);
     if dry {
         println!("\n--dry-run: nothing was applied.");
         return Ok(0);

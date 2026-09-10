@@ -441,16 +441,21 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
     if report.changes.is_empty() {
         println!("Nothing to do -- the machine matches the config.");
     } else {
-        for c in &report.changes {
-            println!("  {}", c.line());
-        }
-        println!("\n{} change(s). Nothing has been applied.", report.changes.len());
+        diff::print(&report.changes);
+        let n = report.changes.len();
+        println!(
+            "\n{}",
+            color::dim(&format!(
+                "{n} change{}. Nothing has been applied -- run `sudo lami apply` to do so.",
+                if n == 1 { "" } else { "s" }
+            ))
+        );
     }
 
     if !report.skipped.is_empty() {
-        println!("\nnot compared:");
+        println!("\n{}", color::bold("not compared"));
         for s in &report.skipped {
-            println!("  {s}");
+            println!("  {}", color::dim(s));
         }
     }
 
