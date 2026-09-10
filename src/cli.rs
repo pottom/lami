@@ -19,6 +19,14 @@ pub struct Cli {
     #[arg(long, global = true, env = "LAMI_CONFIG_DIR")]
     pub config_dir: Option<PathBuf>,
 
+    /// Git URL of the config repo.
+    ///
+    /// If the local working copy is missing, it is cloned. `lami clone`
+    /// records this permanently; passing it here is a one-off override of
+    /// what ~/.config/lami.kdl says.
+    #[arg(long, global = true, env = "LAMI_REPO")]
+    pub repo: Option<String>,
+
     /// Resolve as a different host (for testing).
     #[arg(long, global = true, env = "LAMI_HOST")]
     pub host: Option<String>,
@@ -36,6 +44,35 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Clone your config repo and remember where it went.
+    ///
+    /// Writes ~/.config/lami.kdl, so every later command finds the repo on
+    /// its own. This is the first thing to run on a new machine.
+    Clone {
+        /// Git URL, as you would give to `git clone`.
+        url: String,
+
+        /// Where to put the working copy. Defaults to ~/.config/lami.
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+
+    /// Fast-forward the config repo to its remote.
+    ///
+    /// Uncommitted local changes are left alone; a diverged history is
+    /// reported rather than merged.
+    Pull,
+
+    /// Commit everything in the config repo and push it.
+    ///
+    /// The counterpart of `capture`: capture writes into the repo, push
+    /// sends it to the other machines.
+    Push {
+        /// Commit message. Defaults to "<hostname>: config update".
+        #[arg(long, short)]
+        message: Option<String>,
+    },
+
     /// Show this host's resolved profile: layers and parameters.
     Show,
 

@@ -325,7 +325,7 @@ without writing anything until you ask.
 ## Trying it out
 
 ```sh
-./install.sh            # build and install to /usr/local/bin
+./install.sh            # build the working tree and install it as a package
 
 # or without installing:
 cargo build
@@ -337,6 +337,38 @@ cargo build
 
 The config directory defaults to `$XDG_CONFIG_HOME/lami`; `--config-dir` or
 `LAMI_CONFIG_DIR` overrides it.
+
+## The config repo
+
+The config is a git repository, and lami can fetch it, find it again and send
+it back:
+
+```sh
+lami clone git@github.com:you/lami-config.git                  # to ~/.config/lami
+lami clone git@github.com:you/lami-config.git --path ~/src/cfg # or wherever
+
+lami pull                    # fast-forward to the remote
+lami push -m "add the laptop"  # commit everything and send it
+```
+
+`lami clone` writes `~/.config/lami.kdl`, so later commands need no flags:
+
+```kdl
+repo "git@github.com:you/lami-config.git"
+path "~/src/cfg"
+```
+
+`--repo <url>` is the one-off version, and clones on demand if the working copy
+is missing — which is all a fresh machine needs:
+
+```sh
+lami --repo git@github.com:you/lami-config.git diff
+```
+
+`pull` and `push` do not parse the config first, on purpose: a config that does
+not load is exactly when you want to pull the fix. Both refuse to run under
+`sudo`, because git needs your ssh agent and would leave root-owned files
+behind.
 
 ## Design principles
 

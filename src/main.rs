@@ -7,13 +7,14 @@ mod color;
 mod config;
 mod diff;
 mod error;
-mod write;
 mod pacman;
 mod perms;
 mod render;
+mod repo;
 mod secret;
 mod state;
 mod systemd;
+mod write;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,23 +26,57 @@ use crate::cli::{Cli, Command};
 use crate::config::Config;
 use crate::error::Error;
 
-/// The config directory: `--config-dir`, `LAMI_CONFIG_DIR`, then
-/// `$XDG_CONFIG_HOME/lami`.
+/// Where the config repo lives when nothing says otherwise.
 ///
 /// The home directory is NOT taken from `$HOME`: under sudo that may still be
 /// the caller's home (`env_keep` / `always_set_home`), and this tool will run
 /// as root.
-fn config_dir(explicit: Option<PathBuf>) -> Result<PathBuf, Error> {
-    if let Some(p) = explicit {
-        return Ok(p);
-    }
+fn default_config_dir(home: &Path) -> PathBuf {
     if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
         if !x.is_empty() {
-            return Ok(PathBuf::from(x).join("lami"));
+            return PathBuf::from(x).join("lami");
         }
     }
-    let home = real_home()?;
-    Ok(home.join(".config").join("lami"))
+    home.join(".config").join("lami")
+}
+
+/// Find the config repo, in order of how explicit the answer is:
+///
+///   1. `--config-dir` (or `LAMI_CONFIG_DIR`)
+///   2. `path` in ~/.config/lami.kdl
+///   3. ~/.config/lami
+///
+/// If it is missing but a repo URL is known -- from `--repo` or from the same
+/// pointer file -- clone it. That is what lets a machine with nothing on it
+/// run `lami --repo <url> apply`.
+fn resolve_config_dir(cli: &Cli, home: &Path) -> Result<PathBuf, Error> {
+    let pointer = repo::Pointer::load(home)?;
+    let dir = cli
+        .config_dir
+        .clone()
+        .or_else(|| pointer.path.clone())
+        .unwrap_or_else(|| default_config_dir(home));
+
+    if dir.is_dir() {
+        return Ok(dir);
+    }
+
+    match cli.repo.clone().or(pointer.repo) {
+        Some(url) => {
+            repo::refuse_root("lami --repo")?;
+            println!("{}", color::bold("config repo"));
+            repo::clone(&url, &dir)?;
+            println!("  {}\n", dir.display());
+            Ok(dir)
+        }
+        None => Err(Error::Other(format!(
+            "no config repo at {}\n\
+             \n  lami clone <git-url>            clone it and remember where\n\
+             \n  lami --repo <git-url> <cmd>    use one without recording it\n\
+             \n  lami --config-dir <path> <cmd>  point at a directory you already have",
+            dir.display()
+        ))),
+    }
 }
 
 /// The real user's home directory, from passwd.
@@ -54,15 +89,12 @@ fn real_home() -> Result<PathBuf, Error> {
 
     let pw = unsafe { libc::getpwuid(uid) };
     if pw.is_null() {
-        return Err(Error::Other(format!(
-            "no passwd entry for uid {uid}"
-        )));
+        return Err(Error::Other(format!("no passwd entry for uid {uid}")));
     }
     let dir = unsafe { std::ffi::CStr::from_ptr((*pw).pw_dir) };
-    Ok(PathBuf::from(
-        dir.to_str()
-            .map_err(|_| Error::Other("home directory path is not valid UTF-8".into()))?,
-    ))
+    Ok(PathBuf::from(dir.to_str().map_err(|_| {
+        Error::Other("home directory path is not valid UTF-8".into())
+    })?))
 }
 
 /// The name of the user we are acting for.
@@ -92,27 +124,36 @@ fn hostname() -> String {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     color::init(cli.no_color);
-    let dir = config_dir(cli.config_dir.clone())?;
+    let home = real_home()?;
 
-    if !dir.is_dir() {
-        return Err(Error::Other(format!(
-            "config directory does not exist: {}\n\
-             Create it, or point at another one: lami --config-dir <path>",
-            dir.display()
-        ))
-        .into());
+    // `clone` is the one command that runs before there is a config to load.
+    if let Command::Clone { url, path } = &cli.command {
+        return cmd_clone(url, path.clone(), &home).map_err(Into::into);
     }
 
-    let cfg = Config::load(&dir, &real_home()?)?;
+    let dir = resolve_config_dir(&cli, &home)?;
+
+    // Syncing the repo deliberately does not parse it. A config that does not
+    // load is exactly when you most want to pull the fix, or push the broken
+    // state to look at it elsewhere.
+    match &cli.command {
+        Command::Pull => return cmd_pull(&dir).map_err(Into::into),
+        Command::Push { message } => return cmd_push(&dir, message.as_deref()).map_err(Into::into),
+        _ => {}
+    }
+
+    let cfg = Config::load(&dir, &home)?;
 
     match cli.command {
+        Command::Clone { .. } => unreachable!("handled before the config is loaded"),
+        Command::Pull | Command::Push { .. } => {
+            unreachable!("handled before the config is loaded")
+        }
         Command::List => cmd_list(&cfg),
         Command::Show => cmd_show(&cfg, cli.host.unwrap_or_else(hostname))?,
         Command::Why { target } => cmd_why(&cfg, cli.host.unwrap_or_else(hostname), &target)?,
         Command::Check => cmd_check(&cfg, cli.host.unwrap_or_else(hostname))?,
-        Command::Apply { dry_run } => {
-            cmd_apply(&cfg, cli.host.unwrap_or_else(hostname), dry_run)?
-        }
+        Command::Apply { dry_run } => cmd_apply(&cfg, cli.host.unwrap_or_else(hostname), dry_run)?,
         Command::Capture {
             package,
             file,
@@ -126,13 +167,11 @@ fn main() -> Result<()> {
             layer.as_deref(),
             dry_run,
         )?,
-        Command::Prune { dry_run, force, yes } => cmd_prune(
-            &cfg,
-            cli.host.unwrap_or_else(hostname),
+        Command::Prune {
             dry_run,
             force,
             yes,
-        )?,
+        } => cmd_prune(&cfg, cli.host.unwrap_or_else(hostname), dry_run, force, yes)?,
         Command::Diff { undeclared } => {
             cmd_diff(&cfg, cli.host.unwrap_or_else(hostname), undeclared)?
         }
@@ -169,6 +208,73 @@ fn cmd_list(cfg: &Config) {
     }
 }
 
+/// Clone the config repo and record where it went.
+fn cmd_clone(url: &str, path: Option<PathBuf>, home: &Path) -> Result<(), Error> {
+    repo::refuse_root("lami clone")?;
+    let dest = path.unwrap_or_else(|| default_config_dir(home));
+
+    println!("{}", color::bold("config repo"));
+    repo::clone(url, &dest)?;
+
+    let ptr = repo::Pointer {
+        repo: Some(url.to_string()),
+        path: Some(dest.clone()),
+    };
+    let file = ptr.save(home)?;
+
+    println!("  {}", dest.display());
+    println!(
+        "  {}",
+        color::dim(&format!("recorded in {}", file.display()))
+    );
+
+    // Say straight away whether this machine is described, because that is
+    // the next thing that can go wrong and it costs nothing to check.
+    match Config::load(&dest, home) {
+        Ok(cfg) => {
+            let h = hostname();
+            if cfg.hosts.contains_key(&h) {
+                println!("\n  this host ({h}) is described. Next:\n");
+                println!("    lami diff");
+                println!("    sudo lami apply");
+            } else {
+                let known: Vec<&str> = cfg.hosts.keys().map(String::as_str).collect();
+                println!(
+                    "\n{}",
+                    color::changed(&format!("  this host ({h}) is not in hosts/ yet"))
+                );
+                println!("  known hosts: {}", known.join(", "));
+                println!("\n    $EDITOR {}/hosts/{h}.kdl", dest.display());
+            }
+        }
+        Err(e) => {
+            println!(
+                "\n{}",
+                color::changed("  cloned, but the config does not parse:")
+            );
+            println!("  {e}");
+        }
+    }
+    Ok(())
+}
+
+/// Fast-forward the config repo.
+fn cmd_pull(dir: &Path) -> Result<(), Error> {
+    repo::refuse_root("lami pull")?;
+    println!("{}", color::bold(&format!("pull {}", dir.display())));
+    repo::pull(dir)?;
+    println!("\nRun `lami diff` to see what the new config would change here.");
+    Ok(())
+}
+
+/// Commit and push the config repo.
+fn cmd_push(dir: &Path, message: Option<&str>) -> Result<(), Error> {
+    repo::refuse_root("lami push")?;
+    println!("{}", color::bold(&format!("push {}", dir.display())));
+    repo::push(dir, message, &hostname())?;
+    Ok(())
+}
+
 fn cmd_show(cfg: &Config, host: String) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
 
@@ -178,12 +284,21 @@ fn cmd_show(cfg: &Config, host: String) -> Result<(), Error> {
     }
     println!("     {}", r.host.origin.display());
 
+    if let Some(sum) = repo::summary(&cfg.dir) {
+        println!("\n{}", color::bold("config repo:"));
+        println!("  {}", cfg.dir.display());
+        println!("  {}", color::dim(&sum));
+    }
+
     println!("\n{}", color::bold("parameters:"));
     for (k, v) in &r.host.params {
         println!("  {k:<14} {v}");
     }
 
-    println!("\n{}", color::bold("layers (resolved, in dependency order):"));
+    println!(
+        "\n{}",
+        color::bold("layers (resolved, in dependency order):")
+    );
     for l in &r.layers {
         let explicit = if r.host.layers.contains(&l.name) {
             ""
@@ -209,7 +324,11 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
                 continue;
             }
             found = true;
-            println!("{}  {}", color::bold(&decl.name), color::dim(&format!("({kind})")));
+            println!(
+                "{}  {}",
+                color::bold(&decl.name),
+                color::dim(&format!("({kind})"))
+            );
             println!("  declared:   {}", decl.origin);
             print!("  applies:    layer '{}'", layer.name);
             if r.host.layers.contains(&layer.name) {
@@ -218,7 +337,11 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
                 println!(" is pulled in via needs");
             }
             if let Some(c) = &decl.condition {
-                let val = r.host.param(&c.key).map(|v| v.to_string()).unwrap_or_default();
+                let val = r
+                    .host
+                    .param(&c.key)
+                    .map(|v| v.to_string())
+                    .unwrap_or_default();
                 println!("  condition:  {} (this host: {} = {})", c, c.key, val);
             }
             println!();
@@ -285,7 +408,11 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
             continue;
         }
         found = true;
-        println!("{}  {}", color::bold(target), color::dim("(watched by a hook)"));
+        println!(
+            "{}  {}",
+            color::bold(target),
+            color::dim("(watched by a hook)")
+        );
         println!("  declared:   {}", h.origin);
         println!("  applies:    layer '{}'", layer.name);
         println!("  runs:       {}", h.run);
@@ -440,7 +567,10 @@ fn cmd_render(
                 println!("{}", color::heading(&format!("=== {}", f.path)));
                 println!(
                     "{}",
-                    color::dim(&format!("    layer {}, declared at {}", layer.name, f.origin))
+                    color::dim(&format!(
+                        "    layer {}, declared at {}",
+                        layer.name, f.origin
+                    ))
                 );
                 println!();
                 for line in content.lines() {
@@ -493,9 +623,11 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
                     if n == 1 { "" } else { "s" }
                 )
             } else {
-                format!("({n} item{} not compared: {})", 
+                format!(
+                    "({n} item{} not compared: {})",
                     if n == 1 { "" } else { "s" },
-                    report.skipped.join(", "))
+                    report.skipped.join(", ")
+                )
             })
         );
     }
@@ -527,8 +659,7 @@ fn cmd_apply(cfg: &Config, host: String, dry: bool) -> Result<(), Error> {
 
     let name = real_user()?;
     let home = real_home()?;
-    let uid = write::uid_of(&name)
-        .ok_or_else(|| Error::Other(format!("no such user: {name}")))?;
+    let uid = write::uid_of(&name).ok_or_else(|| Error::Other(format!("no such user: {name}")))?;
     let gid = unsafe {
         let c = std::ffi::CString::new(name.clone()).unwrap();
         let pw = libc::getpwnam(c.as_ptr());
@@ -631,8 +762,14 @@ fn cmd_capture(
         }
         println!("\nFile one into a layer with:");
         println!("  lami capture --package <name> --layer <layer>");
-        println!("\nlayers on this host: {}", 
-            r.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", "));
+        println!(
+            "\nlayers on this host: {}",
+            r.layers
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
         return Ok(());
     };
 
@@ -641,7 +778,11 @@ fn cmd_capture(
             "which layer should {package} go in?\n\
              \n  lami capture --package {package} --layer <layer>\n\
              \nlayers on this host: {}",
-            r.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", ")
+            r.layers
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         )));
     };
 
@@ -665,13 +806,7 @@ fn cmd_capture(
 }
 
 /// Remove what lami used to manage but no longer declares.
-fn cmd_prune(
-    cfg: &Config,
-    host: String,
-    _dry: bool,
-    force: bool,
-    yes: bool,
-) -> Result<(), Error> {
+fn cmd_prune(cfg: &Config, host: String, _dry: bool, force: bool, yes: bool) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
     let name = real_user()?;
     let home = real_home()?;
@@ -697,12 +832,19 @@ fn cmd_prune(
         println!("  {} {s}", color::removed("- service"));
     }
     for s in &stale.user_services {
-        println!("  {} {s}  {}", color::removed("- service"), color::dim("(user)"));
+        println!(
+            "  {} {s}  {}",
+            color::removed("- service"),
+            color::dim("(user)")
+        );
     }
     for f in &stale.files {
         println!("  {} {f}", color::removed("- file   "));
     }
-    println!("\n{} item(s) lami used to manage and no longer declares.", stale.len());
+    println!(
+        "\n{} item(s) lami used to manage and no longer declares.",
+        stale.len()
+    );
 
     // Dry run is the DEFAULT. Removal has to be asked for twice: once by
     // choosing this command at all, and once by saying --force. A tool that

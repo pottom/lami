@@ -355,16 +355,95 @@ a YubiKey, a password manager, or a USB stick.
 
 ---
 
-## 9. A second machine
+## 9. The repo, and a second machine
 
-1. Write `hosts/<name>.kdl` with its layers and parameters.
-2. Get the repo onto the machine and point `~/.config/lami` at it.
-3. `lami diff` to see what it would do.
-4. `sudo lami apply`.
+Your config is a git repository, and lami knows how to find it, update it and
+send it back. On a new machine that is one command:
+
+```sh
+lami clone git@github.com:you/lami-config.git
+```
+
+That clones it, remembers where it went, and tells you straight away whether
+this machine is described:
+
+```
+config repo
+  git clone git@github.com:you/lami-config.git
+  /home/you/.config/lami
+  recorded in /home/you/.config/lami.kdl
+
+  this host (sam) is described. Next:
+
+    lami diff
+    sudo lami apply
+```
+
+### Where the repo lives
+
+By default the working copy goes to `~/.config/lami`. If you would rather keep
+it with your other projects, say so:
+
+```sh
+lami clone git@github.com:you/lami-config.git --path ~/Projects/lami-config
+```
+
+Either way the answer is written to `~/.config/lami.kdl`, which is the one
+file lami reads before it reads anything else:
+
+```kdl
+// Where lami finds your config repo. Written by `lami clone`;
+// edit it freely, or override with --repo / --config-dir.
+repo "git@github.com:you/lami-config.git"
+path "~/Projects/lami-config"
+```
+
+Both lines are optional, and both have a command line equivalent:
+
+| Where it comes from | Wins over |
+|---|---|
+| `--config-dir <path>` (or `LAMI_CONFIG_DIR`) | everything |
+| `path` in `~/.config/lami.kdl` | the default |
+| `~/.config/lami` | — |
+
+`--repo <url>` (or `LAMI_REPO`) is the same for the remote. If the working
+copy is missing and a URL is known, lami clones it before doing anything else,
+so a machine with nothing on it can go straight to:
+
+```sh
+lami --repo git@github.com:you/lami-config.git diff
+```
+
+Unlike `lami clone`, that is a one-off: nothing is recorded.
+
+### Keeping it in sync
+
+```sh
+lami pull            # fast-forward to the remote
+lami push            # commit everything and send it
+lami push -m "add the nvidia desktop"
+```
+
+`pull` is `--ff-only`: a config repo should not grow a merge commit behind your
+back, and a diverged history is something you want to see in git rather than
+have a tool resolve. Uncommitted work is left where it is, and reported.
+
+Neither command parses the config first. That is deliberate — a config that
+does not load is exactly when you most want to pull the fix.
+
+Both refuse to run under `sudo`: git needs your ssh agent and credential
+helper, which do not survive it, and anything git wrote would end up owned by
+root.
+
+### Adding the machine
 
 If the hostname is not in `hosts/`, lami stops with an error rather than
 guessing. There is no default profile: a typo'd hostname or a fresh VM must not
 quietly receive somebody else's configuration.
+
+1. Write `hosts/<name>.kdl` with its layers and parameters.
+2. `lami diff` to see what it would do.
+3. `sudo lami apply`.
 
 ---
 
@@ -388,11 +467,11 @@ NO_COLOR=1 lami diff        # the de-facto standard, honoured everywhere
 
 ```sh
 lami diff          # what drifted
-lami capture       # pull it back
-git add -A && git commit && git push
+lami capture       # pull it back into the repo
+lami push          # send it
 
 # on the other machine
-git pull
+lami pull
 lami diff
 sudo lami apply
 ```
