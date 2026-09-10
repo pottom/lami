@@ -1,13 +1,13 @@
 description "caelestia shell és a hozzá tartozó látvány"
 needs "gui"
 
+// Az AUR-os csomagok nincsenek külön: a lami a pacman sync adatbázisából
+// tudja, mi jön a repóból és mi az AUR-ból. Neked nem kell fejben tartanod.
 packages {
     adw-gtk-theme
     papirus-icon-theme
-}
 
-aur {
-    caelestia-shell
+    caelestia-shell             // AUR
     caelestia-cli
     bibata-cursor-theme-bin
 }

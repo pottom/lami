@@ -32,12 +32,19 @@ packages {
     firefox     // a munkahelyi SSO miatt kell, ne cseréld chromiumra
 }
 
-services "greetd" "power-profiles-daemon"
+services {
+    greetd
+    power-profiles-daemon    // a caelestia-shell hard dependency-je
+}
 
 when gpu="nvidia" {
     packages { nvidia-open; nvidia-utils; egl-wayland }
 }
 ```
+
+**Az AUR-os csomagoknak nincs külön blokkjuk.** Ugyanabban a `packages` listában
+vannak, és a lami a pacman sync adatbázisából tudja, mi jön honnan — a config
+írásakor ezt nem kell fejben tartanod.
 
 Egy gép azt mondja meg, mely rétegeket kapja és milyen paraméterekkel:
 

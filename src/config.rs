@@ -120,7 +120,6 @@ pub struct Layer {
     pub description: Option<String>,
     pub needs: Vec<String>,
     pub packages: Vec<Decl>,
-    pub aur: Vec<Decl>,
     pub services: Vec<Decl>,
     pub path: PathBuf,
 }
@@ -280,7 +279,6 @@ impl Layer {
             description: None,
             needs: Vec::new(),
             packages: Vec::new(),
-            aur: Vec::new(),
             services: Vec::new(),
             path: path.to_path_buf(),
         };
@@ -305,10 +303,14 @@ fn collect(
                 layer.description = value_of(node).map(|v| v.to_string())
             }
             "needs" if cond.is_none() => layer.needs.extend(args(node)),
+            // Nincs kulon `aur` blokk. Az AUR-bol jovo csomagok ugyanugy
+            // `packages`-ben vannak: a paru maga dontí el, mit hoz a repobol
+            // es mit az AUR-bol, tehat a config irasakor ezt nem kell tudnod.
+            // A megkulonboztetes csak a megjeleniteshez kell, azt a `diff`
+            // kerdezi le a pacman sync adatbazisabol.
             "packages" => layer
                 .packages
                 .extend(names_from(node, src, path, cond.as_ref())),
-            "aur" => layer.aur.extend(names_from(node, src, path, cond.as_ref())),
             "services" => layer
                 .services
                 .extend(names_from(node, src, path, cond.as_ref())),
@@ -485,9 +487,6 @@ impl Resolved<'_> {
     /// A gépre ténylegesen érvényes csomagok, rétegsorrendben.
     pub fn packages(&self) -> Vec<(&Layer, &Decl)> {
         self.select(|l| &l.packages)
-    }
-    pub fn aur(&self) -> Vec<(&Layer, &Decl)> {
-        self.select(|l| &l.aur)
     }
     pub fn services(&self) -> Vec<(&Layer, &Decl)> {
         self.select(|l| &l.services)

@@ -11,7 +11,10 @@ packages {
     firefox     // a munkahelyi SSO miatt kell, ne cseréld chromiumra
 }
 
-services "greetd" "power-profiles-daemon"
+services {
+    greetd
+    power-profiles-daemon    // a caelestia-shell hard dependency-je
+}
 
 // A GPU-tól függő rész. Ugyanaz a réteg, más driver.
 when gpu="intel" {

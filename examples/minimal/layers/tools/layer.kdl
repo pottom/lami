@@ -11,4 +11,6 @@ packages {
     rsync       // a lami capture-je is használja fájlmásoláshoz
 }
 
-services "bluetooth"
+services {
+    bluetooth
+}

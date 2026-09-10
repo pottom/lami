@@ -11,7 +11,11 @@ packages {
     git
 }
 
-services "NetworkManager" "sshd" "fstrim.timer"
+services {
+    NetworkManager
+    sshd
+    fstrim.timer
+}
 
 when ucode="intel" {
     packages { intel-ucode }

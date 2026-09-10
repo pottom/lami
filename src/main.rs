@@ -126,13 +126,9 @@ fn cmd_show(cfg: &Config, host: String) -> Result<(), Error> {
         println!("  {:<12} {}{}", l.name, l.path.display(), explicit);
     }
 
-    let pkgs = r.packages();
-    let aur = r.aur();
-    let svcs = r.services();
     println!("\nerőforrások erre a gépre:");
-    println!("  csomag         {}", pkgs.len());
-    println!("  AUR csomag     {}", aur.len());
-    println!("  szolgáltatás   {}", svcs.len());
+    println!("  csomag         {}", r.packages().len());
+    println!("  szolgáltatás   {}", r.services().len());
     Ok(())
 }
 
@@ -142,7 +138,6 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
     let mut found = false;
     for (kind, items) in [
         ("csomag", r.packages()),
-        ("AUR csomag", r.aur()),
         ("szolgáltatás", r.services()),
     ] {
         for (layer, decl) in items {
