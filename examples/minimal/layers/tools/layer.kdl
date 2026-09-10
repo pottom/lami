@@ -1,0 +1,14 @@
+description "Parancssori eszközök"
+needs "core"
+
+packages {
+    fish
+    starship
+    bat
+    eza
+    btop
+    ripgrep
+    rsync       // a lami capture-je is használja fájlmásoláshoz
+}
+
+services "bluetooth"

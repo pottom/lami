@@ -1,0 +1,22 @@
+description "Alaprendszer: boot, fájlrendszer, hálózat"
+
+packages {
+    base
+    base-devel
+    linux
+    linux-firmware
+    btrfs-progs
+    networkmanager
+    sudo
+    git
+}
+
+services "NetworkManager" "sshd" "fstrim.timer"
+
+when ucode="intel" {
+    packages { intel-ucode }
+}
+
+when ucode="amd" {
+    packages { amd-ucode }
+}

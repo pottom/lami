@@ -1,0 +1,11 @@
+description "Notebook"
+
+layers "core" "tools" "gui"     // rice nincs -- és így egyetlen rice-fájlt sem kap
+
+gpu   "nvidia"
+ucode "amd"
+class "laptop"
+
+cpu-threads 16
+
+// ddc nincs: belső panel, ide brightnessctl való

@@ -1,0 +1,13 @@
+description "caelestia shell és a hozzá tartozó látvány"
+needs "gui"
+
+packages {
+    adw-gtk-theme
+    papirus-icon-theme
+}
+
+aur {
+    caelestia-shell
+    caelestia-cli
+    bibata-cursor-theme-bin
+}

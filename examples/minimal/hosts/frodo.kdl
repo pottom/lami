@@ -1,0 +1,13 @@
+description "Asztali gép, Gigabyte Z390 + i7-9700K"
+
+// Ezeket a rétegeket kapja. A függőségeiket (needs) nem kell felsorolni,
+// azokat a lami hozzáveszi.
+layers "core" "tools" "gui" "rice"
+
+// Paraméterek. A rétegek `when` blokkjai ezekre hivatkoznak.
+gpu   "intel"
+ucode "intel"
+class "desktop"
+
+cpu-threads 8
+ddc                 // külső monitor fényereje DDC/CI-n
