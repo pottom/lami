@@ -187,25 +187,58 @@ pub fn run_apply(
     }
 
     // --- services ---------------------------------------------------------
-    let units: Vec<String> = report
+    //
+    // Order within this block matters: reload before anything else, so systemd
+    // knows about a unit file that was just written; then set states; then
+    // restart. Enabling a unit systemd has not re-read yet simply fails.
+    let svc: Vec<&Change> = report
         .changes
         .iter()
-        .filter_map(|c| match c {
-            Change::EnableService { unit, .. } => Some(unit.clone()),
-            _ => None,
+        .filter(|c| {
+            matches!(
+                c,
+                Change::SetUnitState { .. }
+                    | Change::DaemonReload { .. }
+                    | Change::RestartUnit { .. }
+            )
         })
         .collect();
-    if !units.is_empty() {
+
+    if !svc.is_empty() {
         println!("{}", crate::color::bold("services:"));
-        // Enable only; never start. A unit that needs to be running now is a
-        // decision for the operator, not a side effect of writing config.
-        run(Command::new("systemctl")
-            .arg("enable")
-            .args(units.iter().map(|s| s.as_str())))?;
-        for u in &units {
-            println!("  {u} enabled");
+
+        for c in &svc {
+            if let Change::DaemonReload { scope } = c {
+                run(systemd::cmd(*scope, &actor.name).arg("daemon-reload"))?;
+                println!("  systemd reloaded");
+            }
         }
-        let _ = Command::new("systemctl").arg("daemon-reload").status();
+
+        for c in &svc {
+            if let Change::SetUnitState {
+                unit, scope, want, ..
+            } = c
+            {
+                use crate::config::UnitState;
+                let verb = match want {
+                    UnitState::Enabled => "enable",
+                    UnitState::Disabled => "disable",
+                    UnitState::Masked => "mask",
+                };
+                run(systemd::cmd(*scope, &actor.name).args([verb, unit]))?;
+                println!("  {unit} {want}");
+            }
+        }
+
+        // Last, and only for units that asked. lami still never STARTS a
+        // service: a restart here is finishing a change to that unit's own
+        // file, not deciding that it ought to be running.
+        for c in &svc {
+            if let Change::RestartUnit { unit, scope, .. } = c {
+                run(systemd::cmd(*scope, &actor.name).args(["restart", unit]))?;
+                println!("  {unit} restarted");
+            }
+        }
     }
 
     // --- hooks ------------------------------------------------------------

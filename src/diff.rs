@@ -13,11 +13,21 @@ use crate::{pacman, perms, render};
 pub enum Change {
     /// Declared, but not installed as an explicit package.
     InstallPackage { name: String, layer: String },
-    /// Declared, but the unit is not enabled.
-    EnableService {
+    /// A unit is not in the state the config asks for.
+    SetUnitState {
         unit: String,
         layer: String,
+        scope: crate::config::Scope,
+        want: crate::config::UnitState,
         current: State,
+    },
+    /// systemd has to be told to re-read its unit files.
+    DaemonReload { scope: crate::config::Scope },
+    /// A unit whose own file changed, and which asked to be restarted for it.
+    RestartUnit {
+        unit: String,
+        scope: crate::config::Scope,
+        because: String,
     },
     /// Declared, but the file is missing.
     CreateFile { path: String, layer: String },
@@ -39,7 +49,9 @@ impl Change {
     pub fn kind(&self) -> &'static str {
         match self {
             Change::InstallPackage { .. } => "packages",
-            Change::EnableService { .. } => "services",
+            Change::SetUnitState { .. }
+            | Change::DaemonReload { .. }
+            | Change::RestartUnit { .. } => "services",
             Change::CreateFile { .. }
             | Change::UpdateFile { .. }
             | Change::FixPermissions { .. } => "files",
@@ -53,7 +65,13 @@ impl Change {
     pub fn verb(&self) -> &'static str {
         match self {
             Change::InstallPackage { .. } => "install",
-            Change::EnableService { .. } => "enable",
+            Change::SetUnitState { want, .. } => match want {
+                crate::config::UnitState::Enabled => "enable",
+                crate::config::UnitState::Disabled => "disable",
+                crate::config::UnitState::Masked => "mask",
+            },
+            Change::DaemonReload { .. } => "reload",
+            Change::RestartUnit { .. } => "restart",
             Change::CreateFile { .. } => "create",
             Change::UpdateFile { .. } => "write",
             Change::FixPermissions { .. } => "chmod",
@@ -65,7 +83,11 @@ impl Change {
     pub fn subject(&self) -> String {
         match self {
             Change::InstallPackage { name, .. } => name.clone(),
-            Change::EnableService { unit, .. } => unit.clone(),
+            Change::SetUnitState { unit, .. } | Change::RestartUnit { unit, .. } => unit.clone(),
+            Change::DaemonReload { scope } => match scope {
+                crate::config::Scope::System => "systemd".into(),
+                crate::config::Scope::User => "systemd --user".into(),
+            },
             Change::CreateFile { path, .. }
             | Change::UpdateFile { path, .. }
             | Change::FixPermissions { path, .. } => path.clone(),
@@ -79,9 +101,20 @@ impl Change {
             Change::InstallPackage { layer, .. } => {
                 format!("declared in {layer}, not installed")
             }
-            Change::EnableService { layer, current, .. } => {
-                format!("declared in {layer}, currently {current}")
+            Change::SetUnitState {
+                layer,
+                current,
+                scope,
+                ..
+            } => {
+                let s = match scope {
+                    crate::config::Scope::System => "",
+                    crate::config::Scope::User => "user unit, ",
+                };
+                format!("{s}declared in {layer}, currently {current}")
             }
+            Change::DaemonReload { .. } => "a unit file changed".into(),
+            Change::RestartUnit { because, .. } => format!("because {because} changed"),
             Change::CreateFile { layer, .. } => format!("from {layer}, does not exist yet"),
             Change::UpdateFile { layer, .. } => format!("from {layer}, content differs"),
             Change::FixPermissions {
@@ -94,11 +127,15 @@ impl Change {
     fn paint(&self, s: &str) -> String {
         use crate::color::{action, added, changed};
         match self {
-            Change::InstallPackage { .. }
-            | Change::EnableService { .. }
-            | Change::CreateFile { .. } => added(s),
+            Change::InstallPackage { .. } | Change::CreateFile { .. } => added(s),
+            Change::SetUnitState { want, .. } => match want {
+                crate::config::UnitState::Enabled => added(s),
+                _ => changed(s),
+            },
             Change::UpdateFile { .. } | Change::FixPermissions { .. } => changed(s),
-            Change::RunHook { .. } => action(s),
+            Change::RunHook { .. }
+            | Change::DaemonReload { .. }
+            | Change::RestartUnit { .. } => action(s),
         }
     }
 
@@ -208,23 +245,6 @@ pub fn compute(
         skipped.push("packages (pacman not available)".into());
     }
 
-    // --- services ---------------------------------------------------------
-    if systemd::available() {
-        for (layer, d) in r.services() {
-            let unit = systemd::qualify(&d.name);
-            let state = systemd::is_enabled(&unit);
-            if state != State::Enabled {
-                changes.push(Change::EnableService {
-                    unit,
-                    layer: layer.name.clone(),
-                    current: state,
-                });
-            }
-        }
-    } else {
-        skipped.push("services (systemctl not available)".into());
-    }
-
     // --- files ------------------------------------------------------------
     let mut touched: Vec<String> = Vec::new();
 
@@ -266,6 +286,65 @@ pub fn compute(
                 })
             }
         }
+    }
+
+    // --- services ---------------------------------------------------------
+    // Deliberately after files: a unit file lami is about to write may not
+    // exist yet, and asking systemd about it first would say "not found".
+    if systemd::available() {
+        use crate::config::UnitState;
+        for (layer, d) in r.services() {
+            let unit = systemd::qualify(&d.name);
+            let current = systemd::is_enabled_in(d.scope, user, &unit);
+            let matches_want = matches!(
+                (&d.state, &current),
+                (UnitState::Enabled, State::Enabled)
+                    | (UnitState::Disabled, State::Disabled)
+                    | (UnitState::Masked, State::Masked)
+            );
+            // A unit lami is about to create does not exist yet; the state
+            // change is real, it just cannot be observed before the write.
+            let will_exist = current != State::NotFound
+                || touched
+                    .iter()
+                    .any(|p| systemd::unit_of_path(p).as_deref() == Some(unit.as_str()));
+
+            if !matches_want && will_exist {
+                changes.push(Change::SetUnitState {
+                    unit: unit.clone(),
+                    layer: layer.name.clone(),
+                    scope: d.scope,
+                    want: d.state,
+                    current: current.clone(),
+                });
+            }
+
+            if d.restart_on_change {
+                if let Some(p) = touched
+                    .iter()
+                    .find(|p| systemd::unit_of_path(p).as_deref() == Some(unit.as_str()))
+                {
+                    changes.push(Change::RestartUnit {
+                        unit: unit.clone(),
+                        scope: d.scope,
+                        because: p.clone(),
+                    });
+                }
+            }
+        }
+
+        // One reload per scope whose unit directory was written to. Forgetting
+        // this leaves the unit silently running its old definition.
+        for scope in [crate::config::Scope::System, crate::config::Scope::User] {
+            if touched
+                .iter()
+                .any(|p| systemd::is_unit_path(p) == Some(scope))
+            {
+                changes.push(Change::DaemonReload { scope });
+            }
+        }
+    } else {
+        skipped.push("services (systemctl not available)".into());
     }
 
     // --- hooks ------------------------------------------------------------

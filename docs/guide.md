@@ -191,6 +191,72 @@ because a bare `0640` would be read as a decimal number:
 file "/etc/snapper/configs/root" from="files/snapper-root" mode="0640"
 ```
 
+### Services
+
+A bare name means enabled, because that is what a declaration almost always
+means. Say otherwise when you mean otherwise:
+
+```kdl
+services {
+    greetd
+    sshd
+    bluetooth         disabled    // actively off, not merely unmentioned
+    systemd-networkd  masked      // cannot start even as a dependency
+}
+
+user-services {
+    pipewire.socket
+    wireplumber
+}
+```
+
+`disabled` is worth writing even though leaving the line out would also leave
+the unit off: it says the choice was made rather than forgotten, and lami then
+actively turns it off instead of ignoring it.
+
+User units go through `systemctl --user -M <user>@`, which routes via
+systemd-machined and therefore works whether or not the user has a live
+session.
+
+The `.service` suffix is inferred; `.timer`, `.socket` and the rest are kept as
+written.
+
+**lami never starts or stops a service.** Enabling is a statement about the
+next boot; deciding something should be running right now is yours to make.
+
+### Unit files
+
+Write one like any other file. Anything under a systemd unit directory implies
+a `daemon-reload`, so it cannot be forgotten — and forgetting it is a nasty
+failure, because the unit silently keeps running its old definition:
+
+```kdl
+file "/etc/systemd/system/backup.timer" from="files/backup.timer"
+file "~/.config/systemd/user/sync.service" from="files/sync.service"
+
+services { backup.timer }
+```
+
+A drop-in counts as belonging to its unit:
+`/etc/systemd/system/foo.service.d/override.conf` is `foo.service`.
+
+If a unit should come back up after lami rewrites its own file, say so:
+
+```kdl
+services {
+    my-daemon  restart-on-change
+}
+```
+
+That is narrow on purpose — it restarts only when *that unit's* file or drop-in
+changes. For anything else, write the hook out, so the consequence is visible:
+
+```kdl
+on-change "/etc/greetd/config.toml" {
+    run "systemctl restart greetd"    // this ends your session
+}
+```
+
 ### Hooks
 
 Some files need something to happen after they change:

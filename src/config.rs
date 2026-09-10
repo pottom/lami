@@ -114,6 +114,52 @@ impl std::fmt::Display for Condition {
     }
 }
 
+/// Which systemd instance a unit belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    System,
+    /// The invoking user's own systemd instance.
+    User,
+}
+
+/// What a unit's state should be.
+///
+/// A bare name means `Enabled`, because that is what a declaration almost
+/// always means. `Disabled` is worth writing even though leaving the line out
+/// would also leave it off: it says the choice was made rather than forgotten,
+/// and it makes lami actively turn it off rather than merely ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitState {
+    Enabled,
+    Disabled,
+    /// Symlinked to /dev/null: cannot be started even as a dependency.
+    Masked,
+}
+
+impl std::fmt::Display for UnitState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UnitState::Enabled => write!(f, "enabled"),
+            UnitState::Disabled => write!(f, "disabled"),
+            UnitState::Masked => write!(f, "masked"),
+        }
+    }
+}
+
+/// A systemd unit this host should have in a particular state.
+#[derive(Debug, Clone)]
+pub struct UnitDecl {
+    pub name: String,
+    pub state: UnitState,
+    pub scope: Scope,
+    /// Restart this unit when lami rewrites its own unit file or a drop-in for
+    /// it. Deliberately narrow: anything else belongs in an `on-change` hook,
+    /// where the consequence is written out rather than implied.
+    pub restart_on_change: bool,
+    pub origin: Origin,
+    pub condition: Option<Condition>,
+}
+
 /// Where a managed file's content comes from.
 #[derive(Debug, Clone)]
 pub enum Source {
@@ -156,7 +202,7 @@ pub struct Layer {
     pub description: Option<String>,
     pub needs: Vec<String>,
     pub packages: Vec<Decl>,
-    pub services: Vec<Decl>,
+    pub services: Vec<UnitDecl>,
     pub files: Vec<FileDecl>,
     pub hooks: Vec<Hook>,
     /// The layer's own directory, which `from=` paths are relative to.
@@ -354,9 +400,20 @@ fn collect(
             "packages" => layer
                 .packages
                 .extend(names_from(node, src, path, cond.as_ref())),
-            "services" => layer
-                .services
-                .extend(names_from(node, src, path, cond.as_ref())),
+            "services" => layer.services.extend(units_from(
+                node,
+                src,
+                path,
+                cond.as_ref(),
+                Scope::System,
+            )?),
+            "user-services" => layer.services.extend(units_from(
+                node,
+                src,
+                path,
+                cond.as_ref(),
+                Scope::User,
+            )?),
             "when" => {
                 // `when gpu="nvidia" { ... }` -- exactly one property
                 let props: Vec<(&str, &KdlValue)> = node
@@ -652,8 +709,16 @@ impl Resolved<'_> {
     pub fn packages(&self) -> Vec<(&Layer, &Decl)> {
         self.select(|l| &l.packages)
     }
-    pub fn services(&self) -> Vec<(&Layer, &Decl)> {
-        self.select(|l| &l.services)
+    pub fn services(&self) -> Vec<(&Layer, &UnitDecl)> {
+        let mut out = Vec::new();
+        for layer in &self.layers {
+            for d in &layer.services {
+                if self.matches(&d.condition) {
+                    out.push((*layer, d));
+                }
+            }
+        }
+        out
     }
 
     fn select<'s, F>(&'s self, f: F) -> Vec<(&'s Layer, &'s Decl)>
@@ -762,4 +827,77 @@ fn parse_file(
         },
         condition: cond.cloned(),
     })
+}
+
+/// Parse a `services` or `user-services` block.
+///
+/// ```kdl
+/// services {
+///     greetd                      // enabled -- the common case
+///     bluetooth         disabled
+///     systemd-networkd  masked
+///     my-daemon         restart-on-change
+/// }
+/// ```
+fn units_from(
+    node: &KdlNode,
+    src: &str,
+    path: &Path,
+    cond: Option<&Condition>,
+    scope: Scope,
+) -> Result<Vec<UnitDecl>> {
+    let mut out = Vec::new();
+
+    // The argument form, `services "greetd" "sshd"`, is still accepted for
+    // short lists; every unit in it is simply enabled.
+    for name in args(node) {
+        out.push(UnitDecl {
+            name,
+            state: UnitState::Enabled,
+            scope,
+            restart_on_change: false,
+            origin: Origin {
+                file: path.to_path_buf(),
+                line: line_of(src, node.span().offset()),
+            },
+            condition: cond.cloned(),
+        });
+    }
+
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            let mut state = UnitState::Enabled;
+            let mut restart = false;
+
+            for word in args(child) {
+                match word.as_str() {
+                    "enabled" => state = UnitState::Enabled,
+                    "disabled" => state = UnitState::Disabled,
+                    "masked" => state = UnitState::Masked,
+                    "restart-on-change" => restart = true,
+                    other => {
+                        return Err(Error::Config {
+                            msg: format!("`{other}` is not a unit state"),
+                            src: named(path, src),
+                            span: (child.span().offset(), child.span().len()).into(),
+                            label: "expected enabled, disabled, masked or restart-on-change".into(),
+                        })
+                    }
+                }
+            }
+
+            out.push(UnitDecl {
+                name: child.name().value().to_string(),
+                state,
+                scope,
+                restart_on_change: restart,
+                origin: Origin {
+                    file: path.to_path_buf(),
+                    line: line_of(src, child.span().offset()),
+                },
+                condition: cond.cloned(),
+            });
+        }
+    }
+    Ok(out)
 }

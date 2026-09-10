@@ -203,10 +203,7 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
 
     let mut found = false;
-    for (kind, items) in [
-        ("package", r.packages()),
-        ("service", r.services()),
-    ] {
+    for (kind, items) in [("package", r.packages())] {
         for (layer, decl) in items {
             if decl.name != target {
                 continue;
@@ -226,6 +223,32 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
             }
             println!();
         }
+    }
+
+    for (layer, d) in r.services() {
+        if d.name != target && crate::systemd::qualify(&d.name) != target {
+            continue;
+        }
+        found = true;
+        let scope = match d.scope {
+            crate::config::Scope::System => "system",
+            crate::config::Scope::User => "user",
+        };
+        println!(
+            "{}  {}",
+            color::bold(&systemd::qualify(&d.name)),
+            color::dim(&format!("({scope} unit)"))
+        );
+        println!("  declared:   {}", d.origin);
+        println!("  applies:    layer '{}'", layer.name);
+        println!("  wanted:     {}", d.state);
+        if d.restart_on_change {
+            println!("  restart:    when lami rewrites its unit file");
+        }
+        if let Some(c) = &d.condition {
+            println!("  condition:  {c}");
+        }
+        println!();
     }
 
     let user = real_user()?;
