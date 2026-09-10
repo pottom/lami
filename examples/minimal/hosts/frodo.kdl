@@ -10,4 +10,4 @@ ucode "intel"
 class "desktop"
 
 cpu-threads 8
-ddc                 // külső monitor fényereje DDC/CI-n
+ddc on              // külső monitor fényereje DDC/CI-n

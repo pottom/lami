@@ -65,13 +65,21 @@ fn a_gpu_feltetel_szetvalasztja_a_gepeket() {
 }
 
 #[test]
-fn a_puszta_node_igazat_jelent() {
-    // `ddc` argumentum nelkul = be van kapcsolva. A KDL v2-ben a `true`
-    // mar nem szabad szo, es a `ddc #true` csunyabb, mint a `ddc`.
-    let (frodo, _) = lami(&["--host", "frodo", "show"]);
-    assert!(frodo.contains("ddc"), "{frodo}");
-    let (ddcutil, _) = lami(&["--host", "frodo", "why", "ddcutil"]);
-    assert!(ddcutil.contains("ddc=true"), "{ddcutil}");
+fn az_on_off_kapcsolo_mukodik() {
+    // A KDL v2-ben a puszta `true` mar nem szabad szo (`#true` kell), a
+    // `ddc #true` viszont csunyabb, mint a `ddc on`.
+    //
+    // Az `off` azert letezik, mert ONMAGAT DOKUMENTALJA: a sor elhagyasa is
+    // kikapcsolna, de abbol nem derul ki, hogy merlegelted-e.
+    let (frodo, _) = lami(&["--host", "frodo", "why", "ddcutil"]);
+    assert!(frodo.contains("ddc=on"), "{frodo}");
+
+    let (sam, _) = lami(&["--host", "sam", "why", "ddcutil"]);
+    assert!(sam.contains("nincs dekl"), "sam-en ddc off van:\n{sam}");
+
+    // A show a configgal egyezo alakban irja ki, nem true/false-kent.
+    let (show, _) = lami(&["--host", "sam", "show"]);
+    assert!(show.contains("ddc            off"), "{show}");
 }
 
 #[test]

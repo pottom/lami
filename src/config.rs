@@ -66,7 +66,8 @@ impl std::fmt::Display for Value {
         match self {
             Value::Str(s) => write!(f, "{s}"),
             Value::Int(i) => write!(f, "{i}"),
-            Value::Bool(b) => write!(f, "{b}"),
+            Value::Bool(true) => write!(f, "on"),
+            Value::Bool(false) => write!(f, "off"),
             Value::List(v) => write!(f, "{}", v.join(", ")),
         }
     }
@@ -164,13 +165,19 @@ fn value_of(node: &KdlNode) -> Option<Value> {
         .map(|e| e.value())
         .collect();
     match a.len() {
-        // Argumentum nélküli node = bekapcsolt kapcsoló.
-        //
-        // A KDL v2-ben a puszta `true` már nem szabad szó, `#true` kell.
-        // A `ddc` viszont olvashatóbb, mint a `ddc #true`, ezért a jelenlétet
-        // magát vesszük igennek. Az explicit `#true` / `#false` is működik.
+        // Argumentum nélküli node = bekapcsolva. Rövidítés az `on`-ra.
         0 => Some(Value::Bool(true)),
         1 => Some(match a[0] {
+            // A KDL v2-ben a puszta `true` már nem szabad szó, `#true` kell --
+            // a `ddc #true` viszont csúnyább, mint a `ddc on`. Ezért az
+            // on/off a dokumentált forma, a `#true`/`#false` pedig működik,
+            // mert az a KDL natív alakja.
+            //
+            // Miért van egyáltalán `off`, ha a sor elhagyása is kikapcsolná:
+            // mert az `off` ÖNMAGÁT DOKUMENTÁLJA. Egy hiányzó sorból nem
+            // derül ki, hogy mérlegelted-e a dolgot, vagy csak elfelejtetted.
+            KdlValue::String(s) if s == "on" => Value::Bool(true),
+            KdlValue::String(s) if s == "off" => Value::Bool(false),
             KdlValue::String(s) => Value::Str(s.clone()),
             KdlValue::Integer(i) => Value::Int(*i as i64),
             KdlValue::Bool(b) => Value::Bool(*b),
@@ -463,11 +470,15 @@ impl Resolved<'_> {
     fn matches(&self, cond: &Option<Condition>) -> bool {
         match cond {
             None => true,
-            Some(c) => self
-                .host
-                .param(&c.key)
-                .map(|v| v.to_string() == c.value)
-                .unwrap_or(false),
+            Some(c) => self.host.param(&c.key).is_some_and(|v| match v {
+                // A logikai értékeket normalizáljuk, hogy a `when ddc=on` és a
+                // `when ddc=#true` is ugyanazt jelentse.
+                Value::Bool(b) => matches!(
+                    (b, c.value.as_str()),
+                    (true, "on" | "true" | "yes") | (false, "off" | "false" | "no")
+                ),
+                other => other.to_string() == c.value,
+            }),
         }
     }
 

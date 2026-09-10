@@ -50,8 +50,12 @@ layers "core" "tools" "gui" "rice"
 gpu   "intel"
 ucode "intel"
 class "desktop"
-ddc                 // külső monitor fényereje DDC/CI-n
+ddc   on            // külső monitor fényereje DDC/CI-n
 ```
+
+A kapcsolók `on` / `off` alakúak. Az `off`-nak azért van értelme, holott a sor
+elhagyása is kikapcsolná: **önmagát dokumentálja**. Egy hiányzó sorból nem derül
+ki, hogy mérlegelted-e a dolgot, vagy csak elfelejtetted.
 
 Ugyanaz a `gui` réteg fut Intel iGPU-n és RTX 5080-on — csak a `gpu` paraméter más.
 

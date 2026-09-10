@@ -29,7 +29,7 @@ when gpu="amd" {
 }
 
 // Csak akkor, ha van külső monitor DDC/CI-vel.
-when ddc="true" {
+when ddc=on {
     packages { ddcutil }
 }
 

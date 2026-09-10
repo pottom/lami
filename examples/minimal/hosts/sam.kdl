@@ -8,4 +8,4 @@ class "laptop"
 
 cpu-threads 16
 
-// ddc nincs: belső panel, ide brightnessctl való
+ddc off             // belső panel, ide brightnessctl való
