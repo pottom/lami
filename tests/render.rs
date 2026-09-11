@@ -191,3 +191,33 @@ fn no_color_is_accepted_everywhere() {
         assert!(out.status.success(), "{args:?} failed");
     }
 }
+
+#[test]
+fn why_answers_whether_a_file_is_managed() {
+    // "Is this tracked already?" has to work with the path you can see on
+    // disk. The config writes a home path as `~/...`, but the shell expands
+    // the tilde long before lami sees it and tab completion gives the
+    // absolute form.
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    let (out, ok) = lami(&["--host", "sam", "why", "~/.local/bin/hello"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("(file)"), "{out}");
+
+    let (out, ok) = lami(&["--host", "sam", "why", &format!("{home}/.local/bin/hello")]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("(file)"),
+        "the absolute form finds it too:\n{out}"
+    );
+
+    // And the answer for one that is not managed says so plainly, rather than
+    // leaving you to infer it from a declaration that did not appear.
+    let (out, ok) = lami(&["--host", "sam", "why", "/etc/fstab"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("not managed by lami"), "{out}");
+    assert!(
+        out.contains("render --list"),
+        "points somewhere useful:\n{out}"
+    );
+}

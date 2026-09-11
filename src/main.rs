@@ -639,8 +639,10 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
     }
 
     let user = real_user()?;
+    let home = real_home()?;
+    let forms = path_forms(target, &home);
     for (layer, f) in r.files() {
-        if f.path != target {
+        if !forms.iter().any(|p| *p == f.path) {
             continue;
         }
         found = true;
@@ -668,7 +670,7 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
     }
 
     for (layer, h) in r.hooks() {
-        if !h.watch.iter().any(|w| w == target) {
+        if !h.watch.iter().any(|w| forms.iter().any(|p| p == w)) {
             continue;
         }
         found = true;
@@ -684,10 +686,52 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
     }
 
     if !found {
-        println!("'{target}' is not declared for {}.", r.host.name);
-        println!("\nCheck `lami show`, or it may only apply to another host.");
+        // "Is this file managed?" is a question worth answering properly,
+        // because the useful reply is never just "no".
+        if target.contains('/') {
+            println!(
+                "{}",
+                color::bold(&format!("{target}  (not managed by lami)"))
+            );
+            let exists = Path::new(&forms[forms.len() - 1]).exists() || Path::new(target).exists();
+            if exists {
+                println!("  the file exists, but no layer this host enables declares it");
+                println!(
+                    "\n  {}",
+                    color::dim("lami render --list      every path that IS managed")
+                );
+                println!(
+                    "  {}",
+                    color::dim("lami capture --file <path>   only works once a layer declares it")
+                );
+            } else {
+                println!("  no layer declares it, and there is no such file on this machine");
+                println!(
+                    "\n  {}",
+                    color::dim("lami render --list      every path that IS managed")
+                );
+            }
+        } else {
+            println!("'{target}' is not declared for {}.", r.host.name);
+            println!("\nCheck `lami show`, or it may only apply to another host.");
+        }
     }
     Ok(())
+}
+
+/// The forms a managed path can be typed in.
+///
+/// The config writes a home path as `~/.config/fish/config.fish`, but the
+/// shell expands `~` long before lami sees it, and tab completion produces
+/// the absolute form. Asking about a file you can see on disk has to work.
+fn path_forms(target: &str, home: &Path) -> Vec<String> {
+    let mut out = vec![target.to_string()];
+    if let Some(rest) = target.strip_prefix("~/") {
+        out.push(home.join(rest).display().to_string());
+    } else if let Ok(rest) = Path::new(target).strip_prefix(home) {
+        out.push(format!("~/{}", rest.display()));
+    }
+    out
 }
 
 /// Check the config against the system.
@@ -1058,10 +1102,11 @@ fn cmd_capture(
 
     if let Some(path) = file {
         let home = real_home()?;
+        let forms = path_forms(path, &home);
         let (_, decl) = r
             .files()
             .into_iter()
-            .find(|(_, f)| f.path == path)
+            .find(|(_, f)| forms.iter().any(|p| *p == f.path))
             .ok_or_else(|| {
                 Error::Other(format!(
                     "'{path}' is not a file managed for {}.\n\

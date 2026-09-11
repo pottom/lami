@@ -440,6 +440,25 @@ and `LAMI_HOST`, `LAMI_USER`, `LAMI_HOME` set. Write them to be safe to run
 twice anyway: the record protects them, but a lost state file should not be a
 disaster.
 
+### Is this file already managed?
+
+```sh
+lami why ~/.config/fish/config.fish     # or the absolute path; both work
+lami why /etc/fstab
+lami render --list                      # every managed path, in one list
+```
+
+```
+~/.config/fish/config.fish  (file)
+  declared:   layers/tools/layer.kdl:34
+  applies:    layer 'tools'
+  content:    layers/tools/files/home/.config/fish/config.fish
+  permissions: 644 pottom:pottom  (under the user's home)
+
+/etc/fstab  (not managed by lami)
+  the file exists, but no layer this host enables declares it
+```
+
 ## 5. Apply
 
 Always look first:
