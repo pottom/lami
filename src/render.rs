@@ -80,7 +80,7 @@ pub fn file(
         // remember, so there is no way to commit a secret in the clear by
         // forgetting one.
         Source::From(p) if crate::secret::is_encrypted(p) => {
-            crate::secret::decrypt(p, settings.age_identity.as_deref())?
+            crate::secret::decrypt(p, &settings.age_identities)?
         }
         Source::From(p) => fs::read_to_string(p).map_err(|source| Error::Io {
             path: p.clone(),

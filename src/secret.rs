@@ -30,55 +30,70 @@ fn age_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Decrypt an `.age` file using the configured identity.
-pub fn decrypt(file: &Path, identity: Option<&Path>) -> Result<String> {
+/// Decrypt an `.age` file using the configured identities.
+///
+/// All of them are passed to age at once, which tries each until one works.
+/// Having two is the normal case rather than an edge one: a YubiKey for
+/// everyday use and a file key kept somewhere safe, so a lost or forgotten
+/// key does not mean lost secrets.
+pub fn decrypt(file: &Path, identities: &[std::path::PathBuf]) -> Result<String> {
     if !age_available() {
         return Err(Error::Other(format!(
             "{} is encrypted, but `age` is not installed.\n\n  sudo pacman -S age",
             file.display()
         )));
     }
-    let identity = identity.ok_or_else(|| {
-        Error::Other(format!(
+    if identities.is_empty() {
+        return Err(Error::Other(format!(
             "{} is encrypted, but no age identity is configured.\n\
              \nAdd one to config.kdl at the root of your config directory:\n\
              \n  age {{\n      identity \"~/.config/age/lami.txt\"\n  }}\n\
              \nKeep the key OUTSIDE the config repository: that directory gets\n\
              pushed, and a private key in it would go with it.",
             file.display()
-        ))
-    })?;
-
-    if !identity.exists() {
-        return Err(Error::Other(format!(
-            "the age identity {} does not exist.\n\
-             \nOn a new machine this is the one thing that cannot be automated:\n\
-             the key has to get there some other way -- a YubiKey, a password\n\
-             manager, or a USB stick.",
-            identity.display()
         )));
     }
 
-    // A private key anyone on the machine can read is not a private key. age
-    // does not check this, and ssh's refusal to use a group-readable key has
-    // taught everyone what the right behaviour is.
-    if let Ok(meta) = std::fs::metadata(identity) {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = meta.permissions().mode() & 0o777;
-        if mode & 0o077 != 0 {
+    for identity in identities {
+        if !identity.exists() {
             return Err(Error::Other(format!(
-                "the age identity {} is mode {mode:04o}, readable by others.\n\
-                 \n  chmod 600 {}",
-                identity.display(),
+                "the age identity {} does not exist.\n\
+                 \nOn a new machine this is the one thing that cannot be automated:\n\
+                 the key has to get there some other way -- a YubiKey, a password\n\
+                 manager, or a USB stick.",
                 identity.display()
             )));
         }
+
+        // A private key anyone on the machine can read is not a private key.
+        // age does not check this, and ssh's refusal to use a group-readable
+        // key has taught everyone what the right behaviour is.
+        //
+        // A YubiKey identity file is exempt: it holds no secret, only a
+        // pointer to the slot the hardware key answers from.
+        if let Ok(meta) = std::fs::metadata(identity) {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = meta.permissions().mode() & 0o777;
+            let is_pointer = std::fs::read_to_string(identity)
+                .map(|t| t.contains("AGE-PLUGIN-"))
+                .unwrap_or(false);
+            if mode & 0o077 != 0 && !is_pointer {
+                return Err(Error::Other(format!(
+                    "the age identity {} is mode {mode:04o}, readable by others.\n\
+                     \n  chmod 600 {}",
+                    identity.display(),
+                    identity.display()
+                )));
+            }
+        }
     }
 
-    let out = Command::new("age")
-        .arg("--decrypt")
-        .arg("--identity")
-        .arg(identity)
+    let mut cmd = Command::new("age");
+    cmd.arg("--decrypt");
+    for identity in identities {
+        cmd.arg("--identity").arg(identity);
+    }
+    let out = cmd
         .arg(file)
         .output()
         .map_err(|e| Error::Other(format!("cannot run age: {e}")))?;

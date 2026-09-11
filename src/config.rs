@@ -774,8 +774,12 @@ fn collect(
 /// Repository-wide settings, from an optional `config.kdl` at the root.
 #[derive(Debug, Default)]
 pub struct Settings {
-    /// Where the age identity lives on this machine.
-    pub age_identity: Option<PathBuf>,
+    /// Where this machine's age identities live.
+    ///
+    /// More than one is normal rather than exotic: a YubiKey and a file key
+    /// side by side, so the secrets are still readable if the key is in the
+    /// other room. age tries each in turn.
+    pub age_identities: Vec<PathBuf>,
     /// Who encrypted files are encrypted to.
     pub age_recipients: Vec<String>,
 }
@@ -869,7 +873,7 @@ fn parse_settings(dir: &Path, home: &Path) -> Result<Settings> {
                             ),
                         })));
                     }
-                    st.age_identity = Some(resolved)
+                    st.age_identities.push(resolved)
                 }
                 ("recipient", Some(v)) => st.age_recipients.push(v),
                 _ => {}

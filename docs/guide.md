@@ -560,10 +560,14 @@ age-keygen -y ~/.config/age/lami.txt      # the public key, for config.kdl
 ```kdl
 // config.kdl, at the root of the config directory
 age {
-    identity  "~/.config/age/lami.txt"
+    identity  "~/.config/age/lami.txt"    // may be repeated
     recipient "age1ncuc0xf8vd938aq..."    // may be repeated
 }
 ```
+
+Both lists take more than one line. Two identities and two recipients is the
+normal arrangement: a YubiKey for everyday use and a file key kept somewhere
+safe, so a key left in the other room does not mean an unreadable config.
 
 **Keep the key outside the config directory.** lami refuses one inside it, and
 follows symlinks to decide — `~/.config/lami` is commonly a symlink to the

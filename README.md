@@ -365,10 +365,17 @@ Point lami at your key in `config.kdl` at the root of the config directory:
 
 ```kdl
 age {
+    identity  "~/.config/age/yubikey.txt"   // may be repeated
     identity  "~/.config/age/lami.txt"
-    recipient "age1..."          // may be repeated
+    recipient "age1yubikey1..."             // may be repeated
+    recipient "age1..."
 }
 ```
+
+Both lists take more than one line, and that is the normal case rather than
+an exotic one: a YubiKey for everyday use and a file key kept somewhere safe,
+so a lost or forgotten key does not mean lost secrets. age tries each identity
+in turn, and a file encrypted to several recipients is readable by any of them.
 
 **The identity must live outside the config directory**, and lami refuses one
 that does not. It is an easy mistake to make — `~/.config/lami` is commonly a
