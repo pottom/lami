@@ -42,7 +42,9 @@ pub fn decrypt(file: &Path, identity: Option<&Path>) -> Result<String> {
         Error::Other(format!(
             "{} is encrypted, but no age identity is configured.\n\
              \nAdd one to config.kdl at the root of your config directory:\n\
-             \n  age {{\n      identity \"~/.config/lami/identity.txt\"\n  }}",
+             \n  age {{\n      identity \"~/.config/age/lami.txt\"\n  }}\n\
+             \nKeep the key OUTSIDE the config repository: that directory gets\n\
+             pushed, and a private key in it would go with it.",
             file.display()
         ))
     })?;
@@ -55,6 +57,22 @@ pub fn decrypt(file: &Path, identity: Option<&Path>) -> Result<String> {
              manager, or a USB stick.",
             identity.display()
         )));
+    }
+
+    // A private key anyone on the machine can read is not a private key. age
+    // does not check this, and ssh's refusal to use a group-readable key has
+    // taught everyone what the right behaviour is.
+    if let Ok(meta) = std::fs::metadata(identity) {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(Error::Other(format!(
+                "the age identity {} is mode {mode:04o}, readable by others.\n\
+                 \n  chmod 600 {}",
+                identity.display(),
+                identity.display()
+            )));
+        }
     }
 
     let out = Command::new("age")

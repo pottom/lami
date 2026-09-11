@@ -797,6 +797,27 @@ pub fn expand_home(p: &str, home: &Path) -> PathBuf {
     }
 }
 
+/// Whether `path` is inside `dir`, following symlinks on both.
+///
+/// Comparing the paths as written is not enough: `~/.config/lami` is commonly
+/// a symlink to a repo kept elsewhere, and it is exactly that case this has to
+/// catch. The file itself may not exist yet, so its parent is what gets
+/// resolved.
+fn inside(path: &Path, dir: &Path) -> bool {
+    let real_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let real_path = match path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => match path.parent().map(Path::canonicalize) {
+            Some(Ok(parent)) => match path.file_name() {
+                Some(name) => parent.join(name),
+                None => parent,
+            },
+            _ => path.to_path_buf(),
+        },
+    };
+    real_path.starts_with(&real_dir)
+}
+
 fn parse_settings(dir: &Path, home: &Path) -> Result<Settings> {
     let file = dir.join("config.kdl");
     if !file.is_file() {
@@ -816,7 +837,40 @@ fn parse_settings(dir: &Path, home: &Path) -> Result<Settings> {
         for c in children.nodes() {
             let val = args(c).into_iter().next();
             match (c.name().value(), val) {
-                ("identity", Some(v)) => st.age_identity = Some(expand_home(&v, home)),
+                ("identity", Some(v)) => {
+                    // A relative path is read against the config directory,
+                    // which is what anybody would assume -- and which the
+                    // check below then rejects, because that is inside the
+                    // repo. Resolving it against the working directory would
+                    // mean the same config behaving differently depending on
+                    // where you happened to run lami from.
+                    let expanded = expand_home(&v, home);
+                    let resolved = if expanded.is_absolute() {
+                        expanded
+                    } else {
+                        dir.join(expanded)
+                    };
+                    // The one mistake that would be silent and permanent: a
+                    // private key inside the directory you `git push`. It is
+                    // an easy one to make, because ~/.config/lami is often a
+                    // symlink to the repo -- so the check follows symlinks
+                    // rather than comparing the paths as written.
+                    if inside(&resolved, dir) {
+                        return Err(Error::Config(Box::new(ConfigError {
+                            msg: "the age identity is inside the config repository".into(),
+                            src: named(&file, &src),
+                            span: (c.span().offset(), c.span().len()).into(),
+                            label: format!(
+                                "{} is under {} -- the next `git push` would publish \
+                                 your private key. Keep it somewhere else, e.g. \
+                                 ~/.config/age/lami.txt",
+                                resolved.display(),
+                                dir.display()
+                            ),
+                        })));
+                    }
+                    st.age_identity = Some(resolved)
+                }
                 ("recipient", Some(v)) => st.age_recipients.push(v),
                 _ => {}
             }

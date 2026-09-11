@@ -365,14 +365,38 @@ Point lami at your key in `config.kdl` at the root of the config directory:
 
 ```kdl
 age {
-    identity  "~/.config/lami/identity.txt"
+    identity  "~/.config/age/lami.txt"
     recipient "age1..."          // may be repeated
 }
 ```
 
+**The identity must live outside the config directory**, and lami refuses one
+that does not. It is an easy mistake to make — `~/.config/lami` is commonly a
+symlink to the repo — and the consequence is a private key in the next `git
+push`, so the check follows symlinks rather than comparing paths as written:
+
+```
+× the age identity is inside the config repository
+ ╰── ~/.config/lami/identity.txt is under ~/Projects/lami-config
+     -- the next `git push` would publish your private key
+```
+
+A key the rest of the machine can read is not a private key either: an
+identity file with any group or other permission bit is refused, the way ssh
+refuses one.
+
+Because a file is encrypted to *recipients*, adding a second machine or a
+YubiKey is appending a public key and re-encrypting — no key ever has to be
+copied between machines.
+
 `age` is called as a program rather than linked as a library — the same
 reasoning as pacman, and it means a YubiKey works through
 `age-plugin-yubikey` without lami knowing anything about smartcards.
+
+`capture` re-encrypts rather than writing the live file through, so pulling a
+change back cannot put the secret into the repository in the clear. It prints
+no content either: a terminal is scrollback, and a diff of ciphertext would say
+nothing anyway, since age picks a fresh file key every time.
 
 **A decrypted file is never world-readable.** Whatever the path rules would
 have said, content that was kept encrypted at rest is written `0600`; the

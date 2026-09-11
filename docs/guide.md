@@ -545,17 +545,61 @@ Name an encrypted source `*.age` and it is decrypted on the way out:
 file "~/.ssh/config" from="files/ssh-config.age"
 ```
 
-Point lami at your key once, in `config.kdl` at the root of your config
-directory:
+That is the whole interface. There is no attribute to remember, so there is no
+way to commit a secret in the clear by forgetting one.
+
+### Setting it up, once
+
+```sh
+mkdir -p ~/.config/age && chmod 700 ~/.config/age
+age-keygen -o ~/.config/age/lami.txt
+chmod 600 ~/.config/age/lami.txt
+age-keygen -y ~/.config/age/lami.txt      # the public key, for config.kdl
+```
 
 ```kdl
+// config.kdl, at the root of the config directory
 age {
-    identity  "~/.config/lami/identity.txt"
-    recipient "age1..."
+    identity  "~/.config/age/lami.txt"
+    recipient "age1ncuc0xf8vd938aq..."    // may be repeated
 }
 ```
 
-A decrypted file is always written `0600`, wherever it lands.
+**Keep the key outside the config directory.** lami refuses one inside it, and
+follows symlinks to decide — `~/.config/lami` is commonly a symlink to the
+repo, which makes this an easy mistake with a permanent consequence:
+
+```
+× the age identity is inside the config repository
+ ╰── the next `git push` would publish your private key
+```
+
+An identity file readable by anyone else is refused too, the way ssh refuses
+one.
+
+### Encrypting something
+
+```sh
+age -r "$(age-keygen -y ~/.config/age/lami.txt)" \
+    -o layers/net/files/home/.ssh/config.age ~/.ssh/config
+```
+
+Then declare it, and everything else works as usual: `lami diff` decrypts to
+compare, `lami render` prints the plaintext, `lami apply` writes it.
+
+### What it does for you
+
+- **A decrypted file is always `0600`**, wherever it lands. The encryption is
+  the statement that it is secret; the mode follows from that rather than from
+  where the file happens to go.
+- **`capture` re-encrypts** rather than writing the live file through. Without
+  that, pulling a change back would put the secret into the repo in the clear,
+  under a name ending in `.age` — the last place anybody would look for a
+  leak. It prints no content either: a terminal is scrollback, and a diff of
+  ciphertext says nothing anyway, since age picks a fresh file key every time.
+- **More than one recipient** is how a second machine or a YubiKey is added:
+  append its public key and re-encrypt. No key is ever copied between
+  machines.
 
 Getting the first key onto a new machine is the one step nothing can automate —
 a YubiKey, a password manager, or a USB stick.

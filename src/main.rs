@@ -1158,7 +1158,7 @@ fn cmd_capture(
                 ))
             })?;
         let live = render::target_path(decl, &home);
-        let edit = capture::capture_file(decl, &live, dry)?;
+        let edit = capture::capture_file(decl, &live, dry, &cfg.settings)?;
         println!(
             "{}  {}  {}",
             edit.file.display(),

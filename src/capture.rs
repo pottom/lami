@@ -45,11 +45,22 @@ pub struct Edit {
     pub file: std::path::PathBuf,
     pub before: String,
     pub after: String,
+    /// The source is an `.age` file, so it was re-encrypted rather than
+    /// written through.
+    pub encrypted: bool,
 }
 
 impl Edit {
     /// The lines that would change, as a plain unified-ish summary.
     pub fn summary(&self) -> String {
+        if self.encrypted {
+            // Deliberately no content. Printing a secret to a terminal is a
+            // way of putting it in scrollback, and a diff of the ciphertext
+            // would say nothing anyway: age picks a fresh file key every time,
+            // so every byte changes whether the plaintext did or not.
+            let n = self.after.lines().count();
+            return format!("(re-encrypted, {n} line(s) -- content not shown)");
+        }
         let b: Vec<&str> = self.before.lines().collect();
         let a: Vec<&str> = self.after.lines().collect();
         let mut out: Vec<String> = b
@@ -132,6 +143,7 @@ pub fn add_package(layer_file: &Path, package: &str, dry: bool) -> Result<Edit> 
         file: layer_file.to_path_buf(),
         before: src,
         after,
+        encrypted: false,
     })
 }
 
@@ -143,7 +155,12 @@ pub fn add_package(layer_file: &Path, package: &str, dry: bool) -> Result<Edit> 
 /// guess, those are reported as needing a hand edit, which is also why the
 /// layer files in this repo prefer `from=` for anything likely to be tweaked
 /// in place.
-pub fn capture_file(decl: &crate::config::FileDecl, live: &Path, dry: bool) -> Result<Edit> {
+pub fn capture_file(
+    decl: &crate::config::FileDecl,
+    live: &Path,
+    dry: bool,
+    settings: &crate::config::Settings,
+) -> Result<Edit> {
     let source = match &decl.source {
         crate::config::Source::From(p) if crate::render::is_template(p) => {
             return Err(Error::Other(format!(
@@ -173,16 +190,27 @@ pub fn capture_file(decl: &crate::config::FileDecl, live: &Path, dry: bool) -> R
     })?;
     let before = std::fs::read_to_string(&source).unwrap_or_default();
 
+    // An encrypted source has to go back encrypted. Writing the live content
+    // through would put the secret in the repository in the clear, under a
+    // name ending in .age -- which is the last place anybody would think to
+    // look for a leak.
+    let encrypted = crate::secret::is_encrypted(&source);
+
     if !dry {
-        std::fs::write(&source, &after).map_err(|e| Error::Io {
-            path: source.clone(),
-            source: e,
-        })?;
+        if encrypted {
+            crate::secret::encrypt(&after, &settings.age_recipients, &source)?;
+        } else {
+            std::fs::write(&source, &after).map_err(|e| Error::Io {
+                path: source.clone(),
+                source: e,
+            })?;
+        }
     }
     Ok(Edit {
         file: source,
         before,
         after,
+        encrypted,
     })
 }
 
