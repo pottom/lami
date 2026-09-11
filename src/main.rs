@@ -180,10 +180,16 @@ fn main() -> Result<()> {
         Command::Diff { undeclared } => {
             cmd_diff(&cfg, cli.host.unwrap_or_else(hostname), undeclared)?
         }
-        Command::Render { target, out, list } => cmd_render(
+        Command::Render {
+            target,
+            layer,
+            out,
+            list,
+        } => cmd_render(
             &cfg,
             cli.host.unwrap_or_else(hostname),
             target.as_deref(),
+            layer.as_deref(),
             out.as_deref(),
             list,
         )?,
@@ -857,6 +863,7 @@ fn cmd_render(
     cfg: &Config,
     host: String,
     target: Option<&str>,
+    only_layer: Option<&str>,
     out: Option<&Path>,
     list_only: bool,
 ) -> Result<(), Error> {
@@ -864,12 +871,48 @@ fn cmd_render(
     let home = real_home()?;
 
     let mut files = r.files();
+
+    if let Some(name) = only_layer {
+        // Checked against the host's own layers, not against every layer in
+        // the repo: asking for a layer this machine does not enable is a
+        // question with an answer, and "nothing" is not it.
+        if !r.layers.iter().any(|l| l.name == name) {
+            return Err(Error::Other(format!(
+                "{} does not enable a layer called '{name}'.\n\
+                 \nlayers on this host: {}",
+                r.host.name,
+                r.layers
+                    .iter()
+                    .map(|l| l.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        files.retain(|(l, _)| l.name == name);
+    }
     if let Some(t) = target {
-        files.retain(|(_, f)| f.path == t);
+        // Both spellings, because the config writes a home path with a tilde
+        // and the shell hands lami the expanded one.
+        let forms = path_forms(t, &home);
+        files.retain(|(_, f)| forms.contains(&f.path));
         if files.is_empty() {
+            // If a layer filter is what excluded it, say so: "not managed" and
+            // "managed, but not by that layer" are different answers.
+            if let Some(name) = only_layer {
+                if let Some((owner, _)) =
+                    r.files().into_iter().find(|(_, f)| forms.contains(&f.path))
+                {
+                    return Err(Error::Other(format!(
+                        "'{t}' is managed, but by layer '{}', not '{name}'.",
+                        owner.name
+                    )));
+                }
+            }
             return Err(Error::Other(format!(
                 "'{t}' is not a file managed for {}.\n\
-                 Run `lami render --list` to see the managed paths.",
+                 \n  lami render --list          every managed path\n\
+                 \n  lami why {t}\n\
+                 \x20      says whether anything declares it at all",
                 r.host.name
             )));
         }

@@ -188,6 +188,13 @@ pub enum Command {
         /// Render only this target path.
         target: Option<String>,
 
+        /// Render only what this layer declares.
+        ///
+        /// Answers "what does the rice layer actually write?" without reading
+        /// the layer file and following every `from=` by hand.
+        #[arg(long)]
+        layer: Option<String>,
+
         /// Write into this directory instead of printing.
         #[arg(long, short)]
         out: Option<PathBuf>,

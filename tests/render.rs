@@ -193,6 +193,29 @@ fn no_color_is_accepted_everywhere() {
 }
 
 #[test]
+fn a_single_file_renders_by_either_spelling() {
+    // The config writes a home path as `~/...`; the shell hands lami the
+    // expanded one. Tab completion produces the second, so it has to work.
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    let (tilde, ok) = lami(&["--host", "sam", "render", "~/.local/bin/hello"]);
+    assert!(ok, "{tilde}");
+
+    let (abs, ok) = lami(&[
+        "--host",
+        "sam",
+        "render",
+        &format!("{home}/.local/bin/hello"),
+    ]);
+    assert!(ok, "{abs}");
+    assert_eq!(tilde, abs, "same file, same output");
+
+    // Raw on stdout, so it can be piped straight into a diff -- no header,
+    // no path, nothing to strip.
+    assert!(!tilde.contains("---"), "{tilde}");
+}
+
+#[test]
 fn why_answers_whether_a_file_is_managed() {
     // "Is this tracked already?" has to work with the path you can see on
     // disk. The config writes a home path as `~/...`, but the shell expands
@@ -220,4 +243,50 @@ fn why_answers_whether_a_file_is_managed() {
         out.contains("render --list"),
         "points somewhere useful:\n{out}"
     );
+}
+
+#[test]
+fn a_single_layer_can_be_rendered_on_its_own() {
+    // "What does the rice layer actually write?" without reading the layer
+    // file and following every from= by hand.
+    let (all, ok) = lami(&["--host", "frodo", "render", "--list"]);
+    assert!(ok, "{all}");
+    let (one, ok) = lami(&["--host", "frodo", "render", "--layer", "gui", "--list"]);
+    assert!(ok, "{one}");
+
+    assert!(one.lines().count() < all.lines().count(), "{one}");
+    assert!(
+        one.lines().all(|l| l.contains("[gui]")),
+        "only that layer's files:\n{one}"
+    );
+}
+
+#[test]
+fn a_layer_this_host_does_not_enable_is_an_error() {
+    // Checked against the host's own layers, not the whole repo: asking about
+    // a layer this machine does not enable is a question with an answer, and
+    // an empty list is not it.
+    let (out, ok) = lami(&["--host", "sam", "render", "--layer", "rice", "--list"]);
+    assert!(!ok, "sam does not enable rice:\n{out}");
+    assert!(
+        out.contains("does not enable a layer called 'rice'"),
+        "{out}"
+    );
+    assert!(out.contains("layers on this host"), "{out}");
+}
+
+#[test]
+fn a_file_from_another_layer_says_which() {
+    // "Not managed" and "managed, but not by that layer" are different
+    // answers, and only one of them is true here.
+    let (out, ok) = lami(&[
+        "--host",
+        "frodo",
+        "render",
+        "--layer",
+        "gui",
+        "/etc/pacman.conf",
+    ]);
+    assert!(!ok, "{out}");
+    assert!(out.contains("but by layer 'core'"), "{out}");
 }

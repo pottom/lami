@@ -236,11 +236,19 @@ two are not tried again — and the one that failed is not recorded, so it is.
 Nothing is installed — you just look at what *would* be:
 
 ```sh
-lami render                    # every managed file, with headers
-lami render --list             # just the paths, and where they are declared
-lami render /etc/hostname      # one file, raw and pipeable
-lami render --out ./preview    # a directory tree mirroring the target paths
+lami render                        # every managed file, with headers
+lami render --list                 # just the paths, and where they are declared
+lami render /etc/hostname          # one file, raw and pipeable
+lami render ~/.config/fish/config.fish   # tilde or absolute, either works
+lami render --layer rice           # only what one layer writes
+lami render --layer rice --list    # ... or only its paths
+lami render --out ./preview        # a directory tree mirroring the target paths
 ```
+
+`--layer` answers "what does this layer actually put on the machine?" without
+reading the layer file and following every `from=` by hand. It is checked
+against the layers **this host** enables, so asking about one it does not have
+is an error rather than an empty list.
 
 The `--out` tree mirrors absolute paths, so it can be compared with the live
 system using your own tools:

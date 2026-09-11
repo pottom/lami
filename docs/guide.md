@@ -84,6 +84,8 @@ lami why /etc/sudoers.d/10-wheel
 ```sh
 lami render --list                 # every managed path, and its mode
 lami render /etc/hostname          # one file, exactly as it would be written
+lami render ~/.config/fish/config.fish   # tilde or absolute, either works
+lami render --layer rice --list    # only what one layer writes
 lami render --out ./preview        # a whole tree you can diff yourself
 ```
 
@@ -94,7 +96,10 @@ lami render --out ./preview
 diff -ru ./preview/etc /etc 2>/dev/null | less
 ```
 
----
+`--layer` answers "what does this layer actually put on the machine?" without
+reading the layer file and following every `from=` by hand. It is checked
+against the layers *this host* enables, so asking about one it does not have
+is an error rather than an empty list.
 
 ## 4. Write a layer
 
