@@ -290,3 +290,99 @@ fn a_file_from_another_layer_says_which() {
     assert!(!ok, "{out}");
     assert!(out.contains("but by layer 'core'"), "{out}");
 }
+
+#[test]
+fn a_file_in_a_managed_directory_that_the_layer_lacks_is_reported() {
+    // A `dir` says the directory belongs to a layer. Something that appears
+    // in it and not in the layer is the one case where "what have I changed
+    // that lami does not know about?" has a bounded answer -- everywhere else
+    // the question would mean walking the whole filesystem.
+    use std::fs;
+    let dir = std::env::temp_dir().join(format!("lami-untracked-{}", std::process::id()));
+    fs::remove_dir_all(&dir).ok();
+    let target = dir.join("live");
+    fs::create_dir_all(dir.join("cfg/hosts")).unwrap();
+    fs::create_dir_all(dir.join("cfg/layers/only/files")).unwrap();
+    fs::create_dir_all(&target).unwrap();
+
+    fs::write(dir.join("cfg/layers/only/files/kept.conf"), "same\n").unwrap();
+    fs::write(target.join("kept.conf"), "same\n").unwrap();
+    fs::write(target.join("stranger.conf"), "nobody declared me\n").unwrap();
+
+    fs::write(
+        dir.join("cfg/hosts/testbox.kdl"),
+        "description \"fixture\"\nlayers \"only\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("cfg/layers/only/layer.kdl"),
+        format!(
+            "description \"fixture\"\n\ndir \"{}\" from=\"files\"\n",
+            target.display()
+        ),
+    )
+    .unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_lami"))
+        .args(["--config-dir", dir.join("cfg").to_str().unwrap()])
+        .args(["--host", "testbox"])
+        .args(["diff", "--undeclared", "--no-color"])
+        .output()
+        .expect("lami runs");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+
+    assert!(text.contains("stranger.conf"), "{text}");
+    assert!(
+        !text.contains("kept.conf"),
+        "the declared one is not:\n{text}"
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn patch_shows_what_differs_inside_a_file() {
+    use std::fs;
+    let dir = std::env::temp_dir().join(format!("lami-patch-{}", std::process::id()));
+    fs::remove_dir_all(&dir).ok();
+    fs::create_dir_all(dir.join("cfg/hosts")).unwrap();
+    fs::create_dir_all(dir.join("cfg/layers/only")).unwrap();
+    let target = dir.join("target.conf");
+    fs::write(&target, "first\nSECOND\nthird\n").unwrap();
+    fs::write(
+        dir.join("cfg/hosts/testbox.kdl"),
+        "description \"fixture\"\nlayers \"only\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("cfg/layers/only/layer.kdl"),
+        format!(
+            "description \"fixture\"\n\nfile \"{}\" {{\n    text \"\"\"\n    first\n    second\n    third\n    \"\"\"\n}}\n",
+            target.display()
+        ),
+    )
+    .unwrap();
+
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_lami"))
+            .args(["--config-dir", dir.join("cfg").to_str().unwrap()])
+            .args(["--host", "testbox"])
+            .arg("--no-color")
+            .args(args)
+            .output()
+            .expect("lami runs");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    // Without --patch the summary says only that it differs.
+    let plain = run(&["diff"]);
+    assert!(plain.contains("content differs"), "{plain}");
+    assert!(!plain.contains("-SECOND"), "{plain}");
+
+    let patched = run(&["diff", "--patch"]);
+    assert!(patched.contains("-second"), "{patched}");
+    assert!(patched.contains("+SECOND"), "{patched}");
+    assert!(patched.contains("@@"), "a unified diff:\n{patched}");
+
+    fs::remove_dir_all(&dir).ok();
+}

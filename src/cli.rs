@@ -115,9 +115,14 @@ pub enum Command {
     /// Nothing is changed. This is the gate before `apply`: its output has to
     /// line up with what your existing tooling reports.
     Diff {
-        /// Also list explicitly installed packages that no layer declares.
+        /// Also list what is on the machine that no layer declares: packages,
+        /// units, group memberships, and files sitting in a managed directory.
         #[arg(long)]
         undeclared: bool,
+
+        /// Show what actually differs inside each changed file, as a diff.
+        #[arg(long, short)]
+        patch: bool,
     },
 
     /// Bring the machine in line with the config.

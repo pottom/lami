@@ -181,8 +181,8 @@ fn main() -> Result<()> {
             force,
             yes,
         } => cmd_prune(&cfg, cli.host.unwrap_or_else(hostname), dry_run, force, yes)?,
-        Command::Diff { undeclared } => {
-            cmd_diff(&cfg, cli.host.unwrap_or_else(hostname), undeclared)?
+        Command::Diff { undeclared, patch } => {
+            cmd_diff(&cfg, cli.host.unwrap_or_else(hostname), undeclared, patch)?
         }
         Command::Render {
             target,
@@ -991,7 +991,7 @@ fn cmd_render(
 }
 
 /// Show what differs between the config and this machine.
-fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Error> {
+fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool, patch: bool) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
     let home = real_home()?;
     let report = diff::compute(&r, &home, &real_user()?, &cfg.settings)?;
@@ -1011,6 +1011,39 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
         }
     } else {
         diff::print(&report.changes);
+        if patch {
+            let user = real_user()?;
+            for (layer, f) in r.files() {
+                let differs = report
+                    .changes
+                    .iter()
+                    .any(|c| matches!(c, diff::Change::UpdateFile { path, .. } if *path == f.path));
+                if !differs {
+                    continue;
+                }
+                // A secret stays a secret. The whole point of keeping it encrypted
+                // at rest is undone by printing it into a terminal's scrollback.
+                if let crate::config::Source::From(p) = &f.source {
+                    if secret::is_encrypted(p) {
+                        println!(
+                            "\n{}",
+                            color::dim(&format!(
+                                "{}: encrypted, so the difference is not shown",
+                                f.path
+                            ))
+                        );
+                        continue;
+                    }
+                }
+                let rendered = render::file(&r, layer, f, &cfg.settings, &home, &user)?;
+                let live = render::target_path(f, &home);
+                let text = content_diff(&rendered, &live, &f.path)?;
+                if !text.trim().is_empty() {
+                    println!();
+                    println!("{}", colourise_patch(&text));
+                }
+            }
+        }
         let n = report.changes.len();
         println!(
             "\n{}",
@@ -1097,6 +1130,22 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
                  Some of these were enabled by the base install rather than by you;\n\
                  that cannot be told apart afterwards, so they are shown.",
                 report.undeclared_services.len()
+            );
+        }
+
+        println!("\nin a managed directory, but the layer has no copy:");
+        if report.untracked_in_dirs.is_empty() {
+            println!("  (none)");
+        } else {
+            for f in &report.untracked_in_dirs {
+                println!("  {f}");
+            }
+            println!(
+                "\n{} file(s). A `dir` says the directory belongs to a layer, so these\n\
+                 are either something to capture or something to delete. `apply` does\n\
+                 neither: it never removes, and it cannot guess that a file you put\n\
+                 there was meant to be kept.",
+                report.untracked_in_dirs.len()
             );
         }
 
@@ -1249,6 +1298,7 @@ fn cmd_capture(cfg: &Config, host: String, t: CaptureTargets<'_>, dry: bool) -> 
 
         if report.undeclared_packages.is_empty()
             && report.undeclared_services.is_empty()
+            && report.untracked_in_dirs.is_empty()
             && changed.is_empty()
         {
             println!("Nothing to capture -- the machine matches the config.");
@@ -1290,6 +1340,15 @@ fn cmd_capture(cfg: &Config, host: String, t: CaptureTargets<'_>, dry: bool) -> 
                 "  lami capture --layer <layer> --all      {}",
                 color::dim("(the same thing, for all of them)")
             );
+        }
+
+        if !report.untracked_in_dirs.is_empty() {
+            println!("\nin a managed directory, but the layer has no copy:");
+            for f in &report.untracked_in_dirs {
+                println!("  {f}");
+            }
+            println!("\nCopy one into its layer with:");
+            println!("  lami capture --file {}", report.untracked_in_dirs[0]);
         }
 
         if !report.undeclared_services.is_empty() {
@@ -1464,6 +1523,65 @@ fn colourise_summary(text: &str) -> String {
             Some('+') => color::added(l),
             Some('-') => color::removed(l),
             _ => l.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A unified diff between what the config would write and what is there.
+///
+/// `diff -u` does the work. Writing a diff algorithm to show somebody what
+/// changed in their own file would be a strange place to spend effort, and
+/// diffutils is in `base`, so it is on every machine lami runs on.
+fn content_diff(rendered: &str, live: &Path, label: &str) -> Result<String, Error> {
+    let mut tmp = tempfile::NamedTempFile::new().map_err(|source| Error::Io {
+        path: std::env::temp_dir(),
+        source,
+    })?;
+    {
+        use std::io::Write;
+        tmp.write_all(rendered.as_bytes())
+            .map_err(|source| Error::Io {
+                path: tmp.path().to_path_buf(),
+                source,
+            })?;
+    }
+
+    let out = std::process::Command::new("diff")
+        .args(["-u", "--label", &format!("config: {label}"), "--label"])
+        .arg(format!("machine: {label}"))
+        .arg(tmp.path())
+        .arg(live)
+        .output()
+        .map_err(|e| Error::Other(format!("cannot run diff: {e}")))?;
+
+    // Exit 0 = same, 1 = differs, 2 = trouble. Only the last is an error.
+    if out.status.code() == Some(2) {
+        return Err(Error::Other(format!(
+            "cannot compare {}:\n{}",
+            live.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Colour a unified diff the way git does.
+fn colourise_patch(patch: &str) -> String {
+    patch
+        .lines()
+        .map(|l| {
+            if l.starts_with("+++") || l.starts_with("---") {
+                color::bold(l)
+            } else if l.starts_with("@@") {
+                color::action(l)
+            } else if l.starts_with('+') {
+                color::added(l)
+            } else if l.starts_with('-') {
+                color::removed(l)
+            } else {
+                l.to_string()
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")

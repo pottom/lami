@@ -234,6 +234,22 @@ pub struct FileDecl {
     pub condition: Option<Condition>,
 }
 
+/// A whole directory taken over by a layer.
+///
+/// The per-file declarations it expands into are what `apply` and `why` work
+/// with; this is kept as well so that one question can still be asked of the
+/// directory as a whole: what is in it on the machine that the layer has no
+/// copy of?
+#[derive(Debug, Clone)]
+pub struct DirDecl {
+    /// The target directory, as written -- `~/...` not yet expanded.
+    pub target: String,
+    /// Where its contents come from in the layer.
+    pub source: PathBuf,
+    pub origin: Origin,
+    pub condition: Option<Condition>,
+}
+
 /// A one-off imperative step.
 ///
 /// Every converging system has this blind spot: the thing that has to happen
@@ -280,6 +296,7 @@ pub struct Layer {
     pub services: Vec<UnitDecl>,
     pub files: Vec<FileDecl>,
     pub hooks: Vec<Hook>,
+    pub dirs: Vec<DirDecl>,
     pub migrations: Vec<Migration>,
     /// The layer's own directory, which `from=` paths are relative to.
     pub dir: PathBuf,
@@ -571,6 +588,7 @@ impl Layer {
             .chain(self.files.iter().filter_map(|d| d.condition.as_ref()))
             .chain(self.hooks.iter().filter_map(|d| d.condition.as_ref()))
             .chain(self.migrations.iter().filter_map(|d| d.condition.as_ref()))
+            .chain(self.dirs.iter().filter_map(|d| d.condition.as_ref()))
     }
 
     fn parse(name: &str, path: &Path) -> Result<Layer> {
@@ -587,6 +605,7 @@ impl Layer {
             services: Vec::new(),
             files: Vec::new(),
             hooks: Vec::new(),
+            dirs: Vec::new(),
             migrations: Vec::new(),
             dir: path.parent().unwrap_or(Path::new(".")).to_path_buf(),
             path: path.to_path_buf(),
@@ -673,9 +692,9 @@ fn collect(
                 layer.files.push(decl);
             }
             "dir" => {
-                for decl in parse_dir(node, src, path, cond.as_ref(), &layer.dir)? {
-                    layer.files.push(decl);
-                }
+                let (decl, files) = parse_dir(node, src, path, cond.as_ref(), &layer.dir)?;
+                layer.dirs.push(decl);
+                layer.files.extend(files);
             }
             "migration" => {
                 let name = args(node).into_iter().next().ok_or_else(|| {
@@ -1175,6 +1194,19 @@ impl Resolved<'_> {
         out
     }
 
+    /// The directories taken over wholesale that apply to this host.
+    pub fn dirs(&self) -> Vec<(&Layer, &DirDecl)> {
+        let mut out = Vec::new();
+        for layer in &self.layers {
+            for d in &layer.dirs {
+                if self.matches(&d.condition) {
+                    out.push((*layer, d));
+                }
+            }
+        }
+        out
+    }
+
     /// The one-off steps that apply to this host, in layer order.
     pub fn migrations(&self) -> Vec<(&Layer, &Migration)> {
         let mut out = Vec::new();
@@ -1426,7 +1458,7 @@ fn parse_dir(
     path: &Path,
     cond: Option<&Condition>,
     layer_dir: &Path,
-) -> Result<Vec<FileDecl>> {
+) -> Result<(DirDecl, Vec<FileDecl>)> {
     let span = (node.span().offset(), node.span().len());
 
     let target = args(node).into_iter().next().ok_or_else(|| {
@@ -1469,7 +1501,18 @@ fn parse_dir(
     let mut out = Vec::new();
     walk(&root, &root, &target, path, line, cond, &mut out)?;
     out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
+    Ok((
+        DirDecl {
+            target,
+            source: root,
+            origin: Origin {
+                file: path.to_path_buf(),
+                line,
+            },
+            condition: cond.cloned(),
+        },
+        out,
+    ))
 }
 
 fn walk(

@@ -237,6 +237,11 @@ pub struct Report {
     /// rather than choices, and are left out for the same reason a primary
     /// group is.
     pub undeclared_services: Vec<crate::systemd::Deviation>,
+    /// Files sitting in a directory a layer took over, that the layer has no
+    /// copy of. The one place where "what have I changed that lami does not
+    /// know about?" has a bounded answer: everywhere else the question would
+    /// mean walking the whole filesystem.
+    pub untracked_in_dirs: Vec<String>,
     pub skipped: Vec<String>,
     /// Things the config asks for that lami cannot do anything about, and
     /// which would otherwise pass silently. A declared unit that does not
@@ -286,6 +291,7 @@ pub fn compute(
     let mut undeclared_packages = Vec::new();
     let mut undeclared_groups = Vec::new();
     let mut undeclared_services = Vec::new();
+    let mut untracked_in_dirs = Vec::new();
     let mut skipped = Vec::new();
     let mut problems = Vec::new();
 
@@ -488,6 +494,47 @@ pub fn compute(
         skipped.push("services (systemctl not available)".into());
     }
 
+    // --- files in a managed directory that the layer has no copy of --------
+    //
+    // A `dir` says "this directory is mine". A file that appears in it and not
+    // in the layer is then either something to capture or something to delete,
+    // and either way it is a thing lami would otherwise never mention.
+    for (_, d) in r.dirs() {
+        let live_root = crate::config::expand_home(&d.target, home);
+        let mut stack = vec![live_root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                let Ok(rel) = p.strip_prefix(&live_root) else {
+                    continue;
+                };
+                // The source may carry a suffix that the target does not:
+                // foo.conf can come from foo.conf.tmpl or foo.conf.age.
+                let base = d.source.join(rel);
+                let known = base.exists()
+                    || base
+                        .with_extension(format!(
+                            "{}.tmpl",
+                            base.extension().and_then(|e| e.to_str()).unwrap_or("")
+                        ))
+                        .exists()
+                    || std::path::PathBuf::from(format!("{}.tmpl", base.display())).exists()
+                    || std::path::PathBuf::from(format!("{}.age", base.display())).exists();
+                if !known {
+                    untracked_in_dirs.push(p.display().to_string());
+                }
+            }
+        }
+    }
+    untracked_in_dirs.sort();
+
     // --- hooks ------------------------------------------------------------
     // A hook is only worth running if one of the files it watches is actually
     // going to change. Running mkinitcpio -P on every apply would work, but it
@@ -533,6 +580,7 @@ pub fn compute(
         undeclared_packages,
         undeclared_groups,
         undeclared_services,
+        untracked_in_dirs,
         skipped,
         problems,
     })

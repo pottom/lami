@@ -465,16 +465,53 @@ nothing:
 $ lami diff
 host: frodo
 
-  ~ file     /etc/pacman.conf  [core]
-  + package  ripgrep  [tools]
-  + service  greetd.service  [gui]  (now: disabled)
+packages
+  install  ripgrep                   declared in tools, not installed
 
-3 change(s). Nothing has been applied.
+files
+  write    /etc/pacman.conf          from core, content differs
 ```
 
-`--undeclared` additionally lists explicitly installed packages that no layer
-declares. `apply` never removes those — that is what `prune` is for, and
-`capture` will offer to file them into a layer.
+`--patch` (or `-p`) shows what actually differs inside each changed file, as a
+coloured unified diff — the same shape `git diff` gives you:
+
+```
+$ lami diff -p
+files
+  write    ~/.config/fastfetch/config.jsonc  from tools, content differs
+
+--- config: ~/.config/fastfetch/config.jsonc
++++ machine: ~/.config/fastfetch/config.jsonc
+@@ -63,3 +63,4 @@
+         "break"
+     ]
+ }
++// a line added by hand
+```
+
+An encrypted file says that it differs and nothing more: printing a secret
+into a terminal's scrollback would undo the point of keeping it encrypted.
+
+`--undeclared` answers the other direction — what is on this machine that
+nothing accounts for. Four questions, and all four used to have no answer at
+all:
+
+| | |
+|---|---|
+| packages | installed explicitly, declared by no layer |
+| units | enabled or masked here, declared by no layer |
+| groups | a member of, declared by no layer |
+| files | sitting in a directory a layer took over, with no copy in the layer |
+
+`apply` never removes any of them — that is what `prune` is for, and `capture`
+will offer to file them into a layer.
+
+The file one is the only place where "what have I changed that lami does not
+know about?" has a bounded answer. A `dir` declaration says a directory
+belongs to a layer, so anything that appears in it and not in the layer is
+either something to capture or something to delete. Outside a managed
+directory the question would mean walking the whole filesystem, and lami does
+not pretend otherwise.
 
 Packages are compared against `pacman -Qqe`, not `pacman -Qq`, on purpose: a
 package present only as a dependency counts as missing, because an orphan sweep
