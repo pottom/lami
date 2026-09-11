@@ -41,10 +41,25 @@ is the one thing that cannot be taken back.
 
 ## The AUR package
 
-**Not published yet.** The name `lami` is free — checked against both the AUR
-and the official repositories — and everything here is ready for it. What is
-missing is an AUR account and an SSH key, which only the maintainer can
-create. Once that is done, installing lami on any Arch machine is one line:
+**Not published yet, and currently not possible.** As of September 2026 the
+AUR has paused new account registration while it deals with a wave of
+automated account creation:
+
+> New account registration is temporarily closed. […] There's no manual
+> registration queue, and we will not be able to respond to requests for new
+> accounts during this time. — aur.archlinux.org, HTTP 503
+
+There is nothing to retry and nothing to ask for; it is announced on
+`aur-general` and the Arch news feed when it reopens. Everything on this side
+is ready and waiting: the name `lami` is free (checked against both the AUR
+and the official repositories), the recipe builds and lints clean, and
+`aur.sh` needs only a clone to push into.
+
+Nothing is blocked by it in the meantime — `base/bootstrap.sh` builds from
+this directory, which is how every machine has been set up so far. The AUR
+would save a `git clone` and a `makepkg`, no more.
+
+Once it reopens, installing lami on any Arch machine is one line:
 
 ```sh
 paru -S lami
@@ -58,7 +73,8 @@ Until then a fresh machine builds it from this directory, which is what
 The AUR needs an account and an SSH key, and only the maintainer can do this
 part:
 
-1. Register at <https://aur.archlinux.org/register>.
+1. Register at <https://aur.archlinux.org/register> — closed as of September
+   2026, see above.
 2. Add a public key under *My Account → SSH Public Key*. A dedicated key is
    worth it — this one can only push packages:
 
