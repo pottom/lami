@@ -642,7 +642,7 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
     let home = real_home()?;
     let forms = path_forms(target, &home);
     for (layer, f) in r.files() {
-        if !forms.iter().any(|p| *p == f.path) {
+        if !forms.contains(&f.path) {
             continue;
         }
         found = true;
@@ -1106,7 +1106,7 @@ fn cmd_capture(
         let (_, decl) = r
             .files()
             .into_iter()
-            .find(|(_, f)| forms.iter().any(|p| *p == f.path))
+            .find(|(_, f)| forms.contains(&f.path))
             .ok_or_else(|| {
                 Error::Other(format!(
                     "'{path}' is not a file managed for {}.\n\
