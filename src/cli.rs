@@ -142,6 +142,10 @@ pub enum Command {
         #[arg(long, value_delimiter = ',')]
         package: Vec<String>,
 
+        /// The unit to file into a layer. Repeatable, like --package.
+        #[arg(long, value_delimiter = ',')]
+        service: Vec<String>,
+
         /// File every package this machine has that no layer declares.
         #[arg(long)]
         all: bool,

@@ -336,7 +336,21 @@ lami capture --layer tools --package cowsay --dry-run
 lami capture --layer tools --package cowsay
 lami capture --layer dev --package podman,podman-compose   # several at once
 lami capture --layer dev --all                     # everything no layer declares
+lami capture --layer net --service sshd            # a unit you enabled by hand
+lami capture --file /etc/pacman.conf               # a managed file's live content
 ```
+
+Units are read off the machine, so the scope and state come with them: a unit
+enabled in the user's own systemd instance lands in `user-services`, and one
+you masked is written `masked` rather than as a bare name.
+
+Which units are on offer comes from the symlinks under `/etc/systemd/system`
+— what this machine was actually told to do — and not from comparing each
+unit against its package's preset. On Arch nothing runs `systemctl
+preset-all`, so half of systemd's own units sit at `disabled` with a preset of
+`enabled`, and a preset comparison reports sixty units nobody touched. What a
+declared unit drags along through its `[Install] Also=` is left out too: those
+are consequences of a decision, not decisions.
 
 `lami capture` with no arguments lists the packages this machine has that no
 layer declares, and prints the command to file them — with their real names in

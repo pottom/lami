@@ -83,6 +83,41 @@ impl Edit {
 /// machine has no `when` condition attached to it, and guessing one would be
 /// worse than leaving the decision to the person.
 pub fn add_package(layer_file: &Path, package: &str, dry: bool) -> Result<Edit> {
+    add_to_block(layer_file, "packages", package, &[], dry)
+}
+
+/// Add a unit to a layer's `services` or `user-services` block.
+///
+/// The state word is written out when it is anything but enabled, because
+/// `disabled` and `masked` are decisions and a bare name is not one.
+pub fn add_service(
+    layer_file: &Path,
+    unit: &str,
+    scope: crate::config::Scope,
+    state: crate::config::UnitState,
+    dry: bool,
+) -> Result<Edit> {
+    let block = match scope {
+        crate::config::Scope::User => "user-services",
+        crate::config::Scope::System => "services",
+    };
+    let extra: Vec<&str> = match state {
+        crate::config::UnitState::Enabled => vec![],
+        crate::config::UnitState::Disabled => vec!["disabled"],
+        crate::config::UnitState::Masked => vec!["masked"],
+    };
+    add_to_block(layer_file, block, unit, &extra, dry)
+}
+
+/// Append one name to a named top-level block, keeping everything else byte
+/// for byte as it was written.
+fn add_to_block(
+    layer_file: &Path,
+    block: &str,
+    name: &str,
+    extra_args: &[&str],
+    dry: bool,
+) -> Result<Edit> {
     let src = std::fs::read_to_string(layer_file).map_err(|source| Error::Io {
         path: layer_file.to_path_buf(),
         source,
@@ -92,20 +127,20 @@ pub fn add_package(layer_file: &Path, package: &str, dry: bool) -> Result<Edit> 
     let node = doc
         .nodes_mut()
         .iter_mut()
-        .find(|n| n.name().value() == "packages")
+        .find(|n| n.name().value() == block)
         .ok_or_else(|| {
             Error::Other(format!(
-                "{} has no top-level `packages` block to add to.\n\
-                 Add one first, even if empty:\n\n  packages {{\n  }}",
+                "{} has no top-level `{block}` block to add to.\n\
+                 Add one first, even if empty:\n\n  {block} {{\n  }}",
                 layer_file.display()
             ))
         })?;
 
     let children = node.ensure_children();
 
-    if children.nodes().iter().any(|n| n.name().value() == package) {
+    if children.nodes().iter().any(|n| n.name().value() == name) {
         return Err(Error::Other(format!(
-            "{package} is already declared in {}",
+            "{name} is already declared in {}",
             layer_file.display()
         )));
     }
@@ -124,7 +159,10 @@ pub fn add_package(layer_file: &Path, package: &str, dry: bool) -> Result<Edit> 
     };
     let _ = indent;
 
-    let mut new = KdlNode::new(package);
+    let mut new = KdlNode::new(name);
+    for a in extra_args {
+        new.push(kdl::KdlEntry::new(kdl::KdlValue::String((*a).to_string())));
+    }
     new.set_format(kdl::KdlNodeFormat {
         leading,
         terminator: "\n".to_string(),
@@ -321,6 +359,61 @@ services {
         let p = tmp("noblock", "description \"empty\"\n");
         let err = add_package(&p, "firefox", false).unwrap_err();
         assert!(err.to_string().contains("packages {"), "{err}");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn a_unit_goes_into_the_services_block() {
+        let p = tmp("svc", LAYER);
+        add_service(
+            &p,
+            "sshd.service",
+            crate::config::Scope::System,
+            crate::config::UnitState::Enabled,
+            false,
+        )
+        .unwrap();
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert!(after.contains("    greetd\n    sshd.service\n"), "{after}");
+        // ... and not into packages, which is the block above it.
+        assert!(!after.contains("ghostty\n    sshd"), "{after}");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn a_state_other_than_enabled_is_written_out() {
+        // A bare name means enabled. `disabled` and `masked` are decisions,
+        // and a decision that looks identical to the default is not one.
+        let p = tmp("masked", LAYER);
+        add_service(
+            &p,
+            "systemd-networkd.service",
+            crate::config::Scope::System,
+            crate::config::UnitState::Masked,
+            false,
+        )
+        .unwrap();
+        let after = std::fs::read_to_string(&p).unwrap();
+        // KDL writes a bare word where one is valid, which is how the state is
+        // spelled by hand too: `bluetooth disabled`.
+        assert!(after.contains("systemd-networkd.service masked"), "{after}");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn a_user_unit_needs_a_user_services_block() {
+        // Scope is not cosmetic: enabling a user unit in system scope
+        // succeeds and does nothing, so the two blocks stay apart.
+        let p = tmp("userscope", LAYER);
+        let err = add_service(
+            &p,
+            "pipewire.socket",
+            crate::config::Scope::User,
+            crate::config::UnitState::Enabled,
+            false,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("user-services"), "{err}");
         std::fs::remove_file(&p).ok();
     }
 }

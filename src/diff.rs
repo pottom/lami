@@ -231,6 +231,12 @@ pub struct Report {
     /// Group memberships no layer declares. The primary group is left out: it
     /// comes with the account and is not a choice anybody made.
     pub undeclared_groups: Vec<String>,
+    /// Units enabled or masked on this machine that no layer declares, read
+    /// from the symlinks under /etc/systemd/system. Units enabled as a side
+    /// effect of a declared one -- its `[Install] Also=` -- are consequences
+    /// rather than choices, and are left out for the same reason a primary
+    /// group is.
+    pub undeclared_services: Vec<crate::systemd::Deviation>,
     pub skipped: Vec<String>,
     /// Things the config asks for that lami cannot do anything about, and
     /// which would otherwise pass silently. A declared unit that does not
@@ -279,6 +285,7 @@ pub fn compute(
     let mut changes: Vec<Change> = Vec::new();
     let mut undeclared_packages = Vec::new();
     let mut undeclared_groups = Vec::new();
+    let mut undeclared_services = Vec::new();
     let mut skipped = Vec::new();
     let mut problems = Vec::new();
 
@@ -452,6 +459,21 @@ pub fn compute(
             }
         }
 
+        // The other direction: what somebody turned on or off by hand.
+        let mut accounted: std::collections::BTreeSet<String> = Default::default();
+        for (_, d) in r.services() {
+            let unit = systemd::qualify(&d.name);
+            accounted.extend(systemd::also_of(d.scope, user, &unit));
+            accounted.insert(unit);
+        }
+        for scope in [crate::config::Scope::System, crate::config::Scope::User] {
+            for dev in systemd::deviations(scope, home) {
+                if !accounted.contains(&dev.unit) {
+                    undeclared_services.push(dev);
+                }
+            }
+        }
+
         // One reload per scope whose unit directory was written to. Forgetting
         // this leaves the unit silently running its old definition.
         for scope in [crate::config::Scope::System, crate::config::Scope::User] {
@@ -510,6 +532,7 @@ pub fn compute(
         changes,
         undeclared_packages,
         undeclared_groups,
+        undeclared_services,
         skipped,
         problems,
     })

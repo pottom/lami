@@ -159,6 +159,7 @@ fn main() -> Result<()> {
         Command::Apply { dry_run } => cmd_apply(&cfg, cli.host.unwrap_or_else(hostname), dry_run)?,
         Command::Capture {
             package,
+            service,
             all,
             file,
             layer,
@@ -166,10 +167,13 @@ fn main() -> Result<()> {
         } => cmd_capture(
             &cfg,
             cli.host.unwrap_or_else(hostname),
-            &package,
-            all,
-            file.as_deref(),
-            layer.as_deref(),
+            CaptureTargets {
+                packages: &package,
+                services: &service,
+                all,
+                file: file.as_deref(),
+                layer: layer.as_deref(),
+            },
             dry_run,
         )?,
         Command::Prune {
@@ -1076,6 +1080,26 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
             );
         }
 
+        println!("\nenabled or masked here, declared by no layer:");
+        if report.undeclared_services.is_empty() {
+            println!("  (none)");
+        } else {
+            for d in &report.undeclared_services {
+                let scope = match d.scope {
+                    config::Scope::User => "  (user)",
+                    config::Scope::System => "",
+                };
+                println!("  {:<36} {}{scope}", d.unit, d.state);
+            }
+            println!(
+                "\n{} unit(s), read from the symlinks under /etc/systemd/system.\n\
+                 Units a declared one drags along -- its [Install] Also= -- are left out.\n\
+                 Some of these were enabled by the base install rather than by you;\n\
+                 that cannot be told apart afterwards, so they are shown.",
+                report.undeclared_services.len()
+            );
+        }
+
         // The same question for group membership, which is otherwise invisible
         // in both directions: apply does not remove it and prune only touches
         // what lami added, so a membership from some forgotten manual step
@@ -1132,15 +1156,24 @@ fn cmd_apply(cfg: &Config, host: String, dry: bool) -> Result<(), Error> {
 }
 
 /// Pull a change made on this machine back into the repo.
-fn cmd_capture(
-    cfg: &Config,
-    host: String,
-    packages: &[String],
+/// What one `capture` invocation was asked to file, and where.
+struct CaptureTargets<'a> {
+    packages: &'a [String],
+    services: &'a [String],
+    /// Every package no layer declares, instead of a named list.
     all: bool,
-    file: Option<&str>,
-    layer: Option<&str>,
-    dry: bool,
-) -> Result<(), Error> {
+    file: Option<&'a str>,
+    layer: Option<&'a str>,
+}
+
+fn cmd_capture(cfg: &Config, host: String, t: CaptureTargets<'_>, dry: bool) -> Result<(), Error> {
+    let CaptureTargets {
+        packages,
+        services,
+        all,
+        file,
+        layer,
+    } = t;
     let r = cfg.resolve(&host)?;
 
     if let Some(path) = file {
@@ -1186,7 +1219,7 @@ fn cmd_capture(
         packages.to_vec()
     };
 
-    if packages.is_empty() {
+    if packages.is_empty() && services.is_empty() {
         // A layer with nothing to put in it is the one combination that used
         // to do nothing at all and say nothing about it.
         if let Some(l) = layer {
@@ -1214,7 +1247,10 @@ fn cmd_capture(
             .filter(|c| matches!(c, diff::Change::UpdateFile { .. }))
             .collect();
 
-        if report.undeclared_packages.is_empty() && changed.is_empty() {
+        if report.undeclared_packages.is_empty()
+            && report.undeclared_services.is_empty()
+            && changed.is_empty()
+        {
             println!("Nothing to capture -- the machine matches the config.");
             return Ok(());
         }
@@ -1231,13 +1267,6 @@ fn cmd_capture(
             println!();
         }
 
-        if report.undeclared_packages.is_empty() {
-            return Ok(());
-        }
-        println!("explicitly installed but declared by no layer:");
-        for p in &report.undeclared_packages {
-            println!("  {p}");
-        }
         let layers = r
             .layers
             .iter()
@@ -1245,17 +1274,47 @@ fn cmd_capture(
             .collect::<Vec<_>>()
             .join(", ");
 
-        // A command that can be pasted, with a name that is actually in the
-        // list above it.
-        println!("\nFile them into a layer with:");
-        println!(
-            "  lami capture --layer <layer> --package {}",
-            report.undeclared_packages.join(",")
-        );
-        println!(
-            "  lami capture --layer <layer> --all      {}",
-            color::dim("(the same thing, for all of them)")
-        );
+        if !report.undeclared_packages.is_empty() {
+            println!("explicitly installed but declared by no layer:");
+            for p in &report.undeclared_packages {
+                println!("  {p}");
+            }
+            // A command that can be pasted, with names that are actually in
+            // the list above it.
+            println!("\nFile them into a layer with:");
+            println!(
+                "  lami capture --layer <layer> --package {}",
+                report.undeclared_packages.join(",")
+            );
+            println!(
+                "  lami capture --layer <layer> --all      {}",
+                color::dim("(the same thing, for all of them)")
+            );
+        }
+
+        if !report.undeclared_services.is_empty() {
+            println!("\nenabled or masked here, declared by no layer:");
+            for d in &report.undeclared_services {
+                let scope = match d.scope {
+                    config::Scope::User => "  (user)",
+                    config::Scope::System => "",
+                };
+                println!("  {:<36} {}{scope}", d.unit, d.state);
+            }
+            println!("\nFile one into a layer with:");
+            println!(
+                "  lami capture --layer <layer> --service {}",
+                report.undeclared_services[0].unit
+            );
+            println!(
+                "{}",
+                color::dim(
+                    "  Some of these were enabled by the base install rather than by you;\n\
+                     \x20 that cannot be told apart afterwards, so all of them are shown."
+                )
+            );
+        }
+
         println!("\nlayers on this host: {layers}");
         return Ok(());
     }
@@ -1265,8 +1324,16 @@ fn cmd_capture(
             "which layer should {} go in?\n\
              \n  lami capture --layer <layer> --package {}\n\
              \nlayers on this host: {}",
-            packages.join(", "),
-            packages.join(","),
+            if packages.is_empty() {
+                services.join(", ")
+            } else {
+                packages.join(", ")
+            },
+            if packages.is_empty() {
+                services.join(",")
+            } else {
+                packages.join(",")
+            },
             r.layers
                 .iter()
                 .map(|l| l.name.as_str())
@@ -1288,6 +1355,25 @@ fn cmd_capture(
     println!("{}", target.path.display());
     for p in &packages {
         let edit = capture::add_package(&target.path, p, dry)?;
+        println!("{}", colourise_summary(&edit.summary()));
+    }
+    let live = if services.is_empty() {
+        Vec::new()
+    } else {
+        diff::compute(&r, &real_home()?, &real_user()?, &cfg.settings)?.undeclared_services
+    };
+    for name in services {
+        // The scope and state are read off the machine rather than asked for:
+        // the unit is being captured because of how it is set right now, and
+        // making somebody restate that would invite getting it wrong.
+        let unit = systemd::qualify(name);
+        let found = live.iter().find(|d| d.unit == unit).ok_or_else(|| {
+            Error::Other(format!(
+                "{unit} is not enabled or masked on this machine, or a layer\n\
+                     already declares it. `lami capture` lists what is on offer."
+            ))
+        })?;
+        let edit = capture::add_service(&target.path, &unit, found.scope, found.state, dry)?;
         println!("{}", colourise_summary(&edit.summary()));
     }
     if dry {

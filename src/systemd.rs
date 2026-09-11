@@ -179,3 +179,117 @@ mod tests {
         );
     }
 }
+
+/// A unit somebody turned on, or masked, against its package's preset.
+///
+/// This is the units' answer to `pacman -Qqe`, and it needs the same care: a
+/// machine has hundreds of unit files, and almost none of their states are
+/// decisions.
+///
+/// Arch does not run `systemctl preset-all`, so a unit sitting at `disabled`
+/// says nothing at all -- it is where everything starts, and "deliberately
+/// off" cannot be told from "never touched". Reporting those would bury the
+/// real answer in sixty lines of systemd's own units. So only two states
+/// count as a choice: enabled where the preset says otherwise, and masked,
+/// which no preset ever asks for.
+#[derive(Debug, Clone)]
+pub struct Deviation {
+    pub unit: String,
+    pub scope: crate::config::Scope,
+    pub state: crate::config::UnitState,
+}
+
+/// Every unit this machine has been told to enable or mask.
+///
+/// Read from the directory systemd reserves for exactly that -- what an
+/// administrator changed -- rather than inferred from `list-unit-files`.
+///
+/// The first attempt compared each unit's state with its package's preset, on
+/// the theory that a disagreement is a decision. On Arch it is not: nothing
+/// runs `systemctl preset-all`, so half of systemd's own units sit at
+/// `disabled` with a preset of `enabled` and would have been reported as
+/// deliberate choices. The symlinks under /etc say what was actually done,
+/// with no guessing.
+pub fn deviations(scope: crate::config::Scope, home: &std::path::Path) -> Vec<Deviation> {
+    use crate::config::{Scope, UnitState};
+
+    let root = match scope {
+        Scope::System => std::path::PathBuf::from("/etc/systemd/system"),
+        // NOT /etc/systemd/user: that is the global default for every user,
+        // and on Arch it is where package presets land. This is the one the
+        // person sitting here chose.
+        Scope::User => home.join(".config/systemd/user"),
+    };
+
+    let mut out = Vec::new();
+    let mut walk = vec![root.clone()];
+    while let Some(dir) = walk.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.is_dir() {
+                // Only one level down: *.wants/ and *.requires/ hold the
+                // enablement symlinks, and nothing nests deeper.
+                if dir == root {
+                    walk.push(path);
+                }
+                continue;
+            }
+            if !meta.is_symlink() {
+                // A real file here is a unit written by hand or by lami, not
+                // a statement about some other unit's state.
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let masked = std::fs::read_link(&path)
+                .map(|t| t == std::path::Path::new("/dev/null"))
+                .unwrap_or(false);
+            // A symlink at the top level that is not a mask is an alias, not
+            // an enablement.
+            let state = if masked {
+                UnitState::Masked
+            } else if dir != root {
+                UnitState::Enabled
+            } else {
+                continue;
+            };
+            out.push(Deviation {
+                unit: name.to_string(),
+                scope,
+                state,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.unit.cmp(&b.unit));
+    out.dedup_by(|a, b| a.unit == b.unit && a.state == b.state);
+    out
+}
+
+/// The units a unit's `[Install] Also=` drags along with it.
+///
+/// `systemctl enable NetworkManager` also enables
+/// NetworkManager-dispatcher.service, and enabling one virtqemud socket
+/// enables its -ro and -admin siblings. Those are consequences of a decision,
+/// not decisions, and offering them for capture would be noise.
+///
+/// Read from `systemctl cat`, which is the file as it actually applies --
+/// drop-ins and /etc overrides included. `systemctl show` does not expose the
+/// property at all.
+pub fn also_of(scope: crate::config::Scope, user: &str, unit: &str) -> Vec<String> {
+    let out = match cmd(scope, user).args(["cat", unit]).output() {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("Also=").map(str::to_string))
+        .flat_map(|v| v.split_whitespace().map(qualify).collect::<Vec<_>>())
+        .collect()
+}

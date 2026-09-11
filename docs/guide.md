@@ -509,7 +509,14 @@ lami capture --file /etc/pacman.conf
 lami capture --layer tools --package cowsay
 lami capture --layer dev --package podman,podman-compose   # several at once
 lami capture --layer dev --all                 # everything no layer declares
+lami capture --layer net --service sshd        # a unit you enabled by hand
 ```
+
+`lami capture` on its own lists three things nothing accounts for: packages
+installed but declared nowhere, units enabled or masked here, and managed
+files whose live content differs. Units bring their scope and state with them
+— a user-scope unit lands in `user-services`, a masked one is written
+`masked`.
 
 This edits the config **you** wrote, so it never reformats your file or eats a
 comment. Check with `git diff` before committing — adding a package should be
