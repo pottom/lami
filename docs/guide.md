@@ -418,7 +418,9 @@ You changed something on the machine and want it in the repo.
 lami capture                                   # what is on offer
 lami capture --file /etc/pacman.conf --dry-run
 lami capture --file /etc/pacman.conf
-lami capture --package cowsay --layer tools
+lami capture --layer tools --package cowsay
+lami capture --layer dev --package podman,podman-compose   # several at once
+lami capture --layer dev --all                 # everything no layer declares
 ```
 
 This edits the config **you** wrote, so it never reformats your file or eats a

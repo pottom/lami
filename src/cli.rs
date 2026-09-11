@@ -137,9 +137,14 @@ pub enum Command {
     /// With no arguments it lists what could be captured and how. Naming a
     /// package files it into a layer.
     Capture {
-        /// The package to file into a layer.
+        /// The package to file into a layer. Repeat it, or separate names
+        /// with commas, to file several at once.
+        #[arg(long, value_delimiter = ',')]
+        package: Vec<String>,
+
+        /// File every package this machine has that no layer declares.
         #[arg(long)]
-        package: Option<String>,
+        all: bool,
 
         /// A managed file whose live content should be copied back.
         #[arg(long)]

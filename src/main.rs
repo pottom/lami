@@ -157,13 +157,15 @@ fn main() -> Result<()> {
         Command::Apply { dry_run } => cmd_apply(&cfg, cli.host.unwrap_or_else(hostname), dry_run)?,
         Command::Capture {
             package,
+            all,
             file,
             layer,
             dry_run,
         } => cmd_capture(
             &cfg,
             cli.host.unwrap_or_else(hostname),
-            package.as_deref(),
+            &package,
+            all,
             file.as_deref(),
             layer.as_deref(),
             dry_run,
@@ -844,10 +846,15 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
     println!("{}\n", color::bold(&format!("host: {}", r.host.name)));
 
     if report.changes.is_empty() {
-        if report.problems.is_empty() {
+        if !report.problems.is_empty() {
+            println!("No changes to make -- but see below.");
+        } else if report.undeclared_packages.is_empty() {
             println!("Nothing to do -- the machine matches the config.");
         } else {
-            println!("No changes to make -- but see below.");
+            // Not the same sentence. `apply` never removes, so a package no
+            // layer declares is nothing for it to do -- but saying "the
+            // machine matches the config" would be claiming more than that.
+            println!("Nothing to apply -- everything the config declares is in place.");
         }
     } else {
         diff::print(&report.changes);
@@ -862,6 +869,21 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
     }
 
     diff::print_problems(&report.problems);
+
+    // The other direction: installed here, declared nowhere. Never a change,
+    // because apply does not remove -- but a new machine built from this
+    // config would not have them, and that is worth one line.
+    if !show_undeclared && !report.undeclared_packages.is_empty() {
+        let n = report.undeclared_packages.len();
+        println!(
+            "{}",
+            color::dim(&format!(
+                "({n} installed package{} declared by no layer -- `lami capture` files them, \
+                 `lami diff --undeclared` lists them)",
+                if n == 1 { "" } else { "s" }
+            ))
+        );
+    }
 
     // Kept to one line. Silently claiming a match for something we could not
     // read would be dishonest, but four lines of it on every single run is
@@ -946,7 +968,8 @@ fn cmd_apply(cfg: &Config, host: String, dry: bool) -> Result<(), Error> {
 fn cmd_capture(
     cfg: &Config,
     host: String,
-    package: Option<&str>,
+    packages: &[String],
+    all: bool,
     file: Option<&str>,
     layer: Option<&str>,
     dry: bool,
@@ -983,7 +1006,36 @@ fn cmd_capture(
         return Ok(());
     }
 
-    let Some(package) = package else {
+    // `--all` means every package the machine has that no layer declares.
+    let packages: Vec<String> = if all {
+        let report = diff::compute(&r, &real_home()?, &real_user()?, &cfg.settings)?;
+        if report.undeclared_packages.is_empty() {
+            println!("Nothing to capture -- every installed package is declared.");
+            return Ok(());
+        }
+        report.undeclared_packages.clone()
+    } else {
+        packages.to_vec()
+    };
+
+    if packages.is_empty() {
+        // A layer with nothing to put in it is the one combination that used
+        // to do nothing at all and say nothing about it.
+        if let Some(l) = layer {
+            let report = diff::compute(&r, &real_home()?, &real_user()?, &cfg.settings)?;
+            let names = report.undeclared_packages.join(",");
+            return Err(Error::Other(if names.is_empty() {
+                format!("--layer {l} names a layer, but not what to put in it.")
+            } else {
+                format!(
+                    "--layer {l} names a layer, but not what to put in it.\n\
+                     \n  lami capture --layer {l} --package {names}\n\
+                     \nor, for everything this machine has that no layer declares:\n\
+                     \n  lami capture --layer {l} --all"
+                )
+            }));
+        }
+
         // No target named: show what is on offer.
         let report = diff::compute(&r, &real_home()?, &real_user()?, &cfg.settings)?;
         println!("{}\n", color::bold(&format!("host: {}", r.host.name)));
@@ -1018,24 +1070,35 @@ fn cmd_capture(
         for p in &report.undeclared_packages {
             println!("  {p}");
         }
-        println!("\nFile one into a layer with:");
-        println!("  lami capture --package <name> --layer <layer>");
+        let layers = r
+            .layers
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        // A command that can be pasted, with a name that is actually in the
+        // list above it.
+        println!("\nFile them into a layer with:");
         println!(
-            "\nlayers on this host: {}",
-            r.layers
-                .iter()
-                .map(|l| l.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "  lami capture --layer <layer> --package {}",
+            report.undeclared_packages.join(",")
         );
+        println!(
+            "  lami capture --layer <layer> --all      {}",
+            color::dim("(the same thing, for all of them)")
+        );
+        println!("\nlayers on this host: {layers}");
         return Ok(());
-    };
+    }
 
     let Some(layer_name) = layer else {
         return Err(Error::Other(format!(
-            "which layer should {package} go in?\n\
-             \n  lami capture --package {package} --layer <layer>\n\
+            "which layer should {} go in?\n\
+             \n  lami capture --layer <layer> --package {}\n\
              \nlayers on this host: {}",
+            packages.join(", "),
+            packages.join(","),
             r.layers
                 .iter()
                 .map(|l| l.name.as_str())
@@ -1051,10 +1114,14 @@ fn cmd_capture(
         ))
     })?;
 
-    let edit = capture::add_package(&target.path, package, dry)?;
-
-    println!("{}", edit.file.display());
-    println!("{}", colourise_summary(&edit.summary()));
+    // One at a time, re-reading the file between each, so the second package
+    // is inserted into the layer the first one just changed rather than into a
+    // stale copy of it.
+    println!("{}", target.path.display());
+    for p in &packages {
+        let edit = capture::add_package(&target.path, p, dry)?;
+        println!("{}", colourise_summary(&edit.summary()));
+    }
     if dry {
         println!("\n--dry-run: nothing was written.");
     } else {

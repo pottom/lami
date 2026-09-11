@@ -88,8 +88,10 @@ fn a_matching_file_produces_no_change() {
 
     let (out, ok) = f.run(&["diff"]);
     assert!(ok, "{out}");
+    // Two spellings, depending on whether the machine running the test has
+    // packages no layer declares. Both start the same way.
     assert!(
-        out.contains("Nothing to do"),
+        out.contains("Nothing to"),
         "a byte-identical file must not show up:\n{out}"
     );
 }
@@ -181,7 +183,7 @@ fn a_hook_stays_quiet_when_nothing_changes() {
     let (out, ok) = f.run(&["diff"]);
     assert!(ok, "{out}");
     assert!(
-        out.contains("Nothing to do"),
+        out.contains("Nothing to"),
         "no file changed, so no hook should run:\n{out}"
     );
 }

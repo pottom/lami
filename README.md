@@ -275,9 +275,17 @@ repo.
 
 ```sh
 lami capture                                       # what could be captured
-lami capture --package cowsay --layer tools --dry-run
-lami capture --package cowsay --layer tools
+lami capture --layer tools --package cowsay --dry-run
+lami capture --layer tools --package cowsay
+lami capture --layer dev --package podman,podman-compose   # several at once
+lami capture --layer dev --all                     # everything no layer declares
 ```
+
+`lami capture` with no arguments lists the packages this machine has that no
+layer declares, and prints the command to file them — with their real names in
+it, not a placeholder. `lami diff` mentions the same count in one line, because
+"nothing to do" would otherwise read as "everything is accounted for" when
+three packages are not.
 
 This edits the config **you** hand-wrote, which is why the format has to
 round-trip: capture must not reformat your file or eat the comment explaining

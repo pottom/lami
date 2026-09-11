@@ -227,5 +227,34 @@ fn a_declared_unit_that_does_not_exist_is_reported() {
     assert!(ok, "{out}");
     assert!(out.contains("problems"), "{out}");
     assert!(out.contains("lami-no-such-unit-exists.service"), "{out}");
-    assert!(!out.contains("Nothing to do"), "{out}");
+    assert!(!out.contains("Nothing to"), "{out}");
+}
+
+#[test]
+fn capture_with_a_layer_but_nothing_to_put_in_it_says_so() {
+    // A flag combination that did nothing and said nothing about it: a new
+    // user reaching for `lami capture --layer dev` got the same listing back
+    // and no hint that a package name was also needed.
+    let f = Fixture::new("layeronly", ONE_FILE);
+    let (out, ok) = f.run(&["capture", "--layer", "only", "--no-color"]);
+    assert!(!ok, "{out}");
+    assert!(out.contains("not what to put in it"), "{out}");
+}
+
+#[test]
+fn capture_takes_several_packages_at_once() {
+    let f = Fixture::new("several", "packages {\n    base\n}\n");
+    let (out, ok) = f.run(&[
+        "capture",
+        "--layer",
+        "only",
+        "--package",
+        "alpha,beta",
+        "--dry-run",
+        "--no-color",
+    ]);
+    assert!(ok, "{out}");
+    assert!(out.contains("+    alpha"), "{out}");
+    assert!(out.contains("+    beta"), "{out}");
+    assert!(out.contains("nothing was written"), "{out}");
 }
