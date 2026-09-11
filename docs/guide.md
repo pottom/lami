@@ -138,8 +138,7 @@ when class="laptop" {
 }
 ```
 
-`gpu`, `class` and the rest are whatever you put in the host file. Switches are
-written `on` / `off`:
+Switches are written `on` / `off`:
 
 ```kdl
 // hosts/frodo.kdl
@@ -151,6 +150,83 @@ ddc   on        // external monitor brightness over DDC/CI
 `off` is worth writing even though leaving the line out would also disable it,
 because it documents itself: a missing line does not say whether you decided
 against it or simply forgot.
+
+### Parameters: say what the layer needs
+
+A layer declares what it expects the host to tell it. This is the contract
+between the two files, and it is worth writing out because without it they can
+only agree by convention:
+
+```kdl
+params {
+    gpu   "which vendor driver to install"  one-of="intel amd nvidia"
+    class "what kind of machine this is"    one-of="desktop laptop vm"
+    ddc   "external monitor brightness over DDC/CI" default=off
+    monitors "Hyprland monitor lines, one per output" list=#true
+}
+```
+
+The description is not optional. It is what somebody reading the host file
+sees when they ask what a line means:
+
+```
+$ lami show
+parameters:
+  class        desktop   core: what kind of machine this is
+  cpu_threads  4         default, core: how many jobs makepkg may run
+  gpu          intel     gui: which vendor driver to install
+```
+
+What it buys, all of it things that used to pass in silence:
+
+- **A required parameter a host omits is an error.** No `default=` means no
+  default: a machine that does not say which GPU it has stops, rather than
+  installing the wrong driver.
+- **`one-of` catches a typo** — and says what was allowed, quoting the line.
+- **`when` may only test a declared parameter.** `when gpu="intle"` and
+  `when hostname="frodo"` used to do exactly what a correct condition that
+  happens not to hold does: nothing, quietly. Now the first is an error and
+  the second works, because `hostname` is always available.
+- **`list=#true` refuses a bare string.** KDL cannot tell one string from a
+  list of one, so `{% for m in monitors %}` over the scalar form produced
+  nothing at all.
+- **`lami check` reports a parameter nothing reads.** Not an error — a template
+  may read it, or a layer this host does not enable may declare it — but not
+  invisible either.
+
+A parameter is declared in the layer that introduces it. A layer that `needs`
+that one and also reads it does not declare it again.
+
+### A new machine
+
+```sh
+lami init bree --layers core,tools,gui
+```
+
+The layers are asked what they need to know, so the file arrives already
+listing it:
+
+```kdl
+description "TODO: what this machine is"
+
+layers "core" "tools" "gui"
+
+// Required. Every one of these has to be answered before
+// `lami diff` will run: there is no default profile here.
+
+// which vendor driver to install (gui)
+// one of: intel amd nvidia
+gpu ""
+
+// Optional: these have defaults, shown here commented out.
+
+// external monitor brightness over DDC/CI (gui)
+// ddc off
+```
+
+`--like frodo` fills the answers in from an existing host, for a machine much
+like one you already have. Copying the file by hand instead means inheriting
+its answers along with any parameter that has since stopped mattering.
 
 ### Files
 

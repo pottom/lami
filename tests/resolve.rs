@@ -83,9 +83,12 @@ fn the_on_off_switch_works() {
     let (sam, _) = lami(&["--host", "sam", "why", "ddcutil"]);
     assert!(sam.contains("is not declared"), "sam has ddc off:\n{sam}");
 
-    // `show` prints it the way the config spells it, not as true/false.
+    // `show` prints it the way the config spells it, not as true/false, and
+    // names the layer that asked for it.
     let (show, _) = lami(&["--host", "sam", "show"]);
-    assert!(show.contains("ddc            off"), "{show}");
+    assert!(show.contains("ddc "), "{show}");
+    assert!(show.contains("off"), "{show}");
+    assert!(show.contains("gui: external monitor brightness"), "{show}");
 }
 
 #[test]

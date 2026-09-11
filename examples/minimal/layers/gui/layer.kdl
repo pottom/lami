@@ -1,6 +1,12 @@
 description "A working Hyprland desktop"
 needs "core"
 
+params {
+    gpu   "which vendor driver to install"  one-of="intel amd nvidia"
+    class "what kind of machine this is"    one-of="desktop laptop"
+    ddc   "external monitor brightness over DDC/CI, pointless on a laptop panel" default=off
+}
+
 packages {
     hyprland
     uwsm

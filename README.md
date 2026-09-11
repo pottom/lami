@@ -29,6 +29,12 @@ One layer is one directory with one file, readable top to bottom:
 description "A working Hyprland desktop"
 needs "core"
 
+// What this layer needs to know about the machine.
+params {
+    gpu "which vendor driver to install" one-of="intel amd nvidia"
+    ddc "external monitor brightness over DDC/CI" default=off
+}
+
 packages {
     hyprland
     greetd
@@ -69,6 +75,49 @@ parameter differs.
 Switches are spelled `on` / `off`. `off` is worth having even though omitting
 the line would also disable the feature, because **it documents itself**: a
 missing line does not tell you whether the choice was considered or forgotten.
+
+### Parameters are a contract
+
+`params` is what connects the two files. Without it the host and the layer can
+only agree by convention, and neither side notices when they stop agreeing — a
+host sets something nothing reads, a layer tests something nothing sets, and
+both stay quiet.
+
+Declaring it means:
+
+| | |
+|---|---|
+| no `default=` | the host **must** answer; omitting it is an error, not a guess |
+| `default=off` | optional, and a host that leaves the line out gets `off` |
+| `one-of="intel amd"` | anything else is an error, with the allowed values |
+| `list=#true` | must be written as a block, since KDL cannot tell one string from a list of one |
+| the description | required — it is what `lami show` and `lami init` print back to you |
+
+`when` may only test a declared parameter, so `when gpu="intle"` is an error
+rather than a condition that silently never holds. `hostname` is always
+available and always comes from the host file's name.
+
+```
+$ lami show
+parameters:
+  gpu          intel     gui: which vendor driver to install
+  ddc          on        gui: external monitor brightness over DDC/CI
+  cpu_threads  4         default, core: how many jobs makepkg may run
+  monitors     HDMI-A-1  no enabled layer declares this
+```
+
+### A new machine
+
+```sh
+lami init bree --layers core,tools,gui
+lami init bree --layers core,tools,gui --like frodo   # start from another host's answers
+```
+
+The layers are asked what they need to know, so the new host file arrives
+already listing it — required parameters blank, optional ones commented out
+with their defaults, each with the description its layer gave it. Copying an
+existing host file instead means inheriting its answers along with any
+parameter that has since stopped mattering.
 
 ## Files
 

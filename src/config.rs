@@ -81,6 +81,13 @@ pub struct Host {
     pub description: Option<String>,
     pub layers: Vec<String>,
     pub params: BTreeMap<String, Value>,
+    /// Where each line was written, so an error about a parameter can point at
+    /// the parameter and not at the first place its name happens to appear --
+    /// which, in a well-commented config, is usually a comment.
+    pub spans: BTreeMap<String, (usize, usize)>,
+    /// The `layers` line, the right place to report something the host never
+    /// mentions at all.
+    pub layers_span: (usize, usize),
     pub origin: PathBuf,
 }
 
@@ -93,6 +100,34 @@ impl Host {
     }
 }
 
+/// What a layer expects a host to tell it.
+///
+/// This is the contract between `hosts/` and `layers/`, and it exists because
+/// without it the two sides could only agree by convention. A host could set a
+/// parameter nothing reads, a layer could test one nothing sets, and both
+/// stayed silent -- which is exactly how a `monitors` line ended up in a host
+/// file that no enabled layer ever looked at.
+///
+/// Declaring it buys three things: `when` can reject a typo'd key instead of
+/// quietly never matching, a host that omits something required is an error
+/// rather than a surprise, and `lami init` can write a new host file that
+/// already lists what has to be filled in.
+#[derive(Debug, Clone)]
+pub struct ParamDecl {
+    pub name: String,
+    /// Required. A parameter whose meaning is not written down is exactly the
+    /// kind of thing this block exists to prevent.
+    pub description: String,
+    /// `default=` makes the parameter optional and supplies the value.
+    pub default: Option<Value>,
+    /// `one-of="a b c"`: the only accepted values.
+    pub one_of: Vec<String>,
+    /// `list=#true`: must be written as a block, so it stays a list even with
+    /// one entry.
+    pub list: bool,
+    pub origin: Origin,
+}
+
 /// A single declaration together with where it was written.
 #[derive(Debug, Clone)]
 pub struct Decl {
@@ -102,11 +137,23 @@ pub struct Decl {
     pub condition: Option<Condition>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Condition {
     pub key: String,
     pub value: String,
+    /// Where the `when` was written, so an unknown key can be pointed at.
+    pub file: PathBuf,
+    pub span: (usize, usize),
 }
+
+/// Two conditions are the same condition if they test the same thing. Where
+/// they were written is for error messages, not identity.
+impl PartialEq for Condition {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.value == other.value
+    }
+}
+impl Eq for Condition {}
 
 impl std::fmt::Display for Condition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -201,6 +248,8 @@ pub struct Layer {
     pub name: String,
     pub description: Option<String>,
     pub needs: Vec<String>,
+    /// What this layer needs to know about the machine. See [`ParamDecl`].
+    pub params: Vec<ParamDecl>,
     pub packages: Vec<Decl>,
     pub services: Vec<UnitDecl>,
     pub files: Vec<FileDecl>,
@@ -295,6 +344,103 @@ fn value_of(node: &KdlNode) -> Option<Value> {
     }
 }
 
+/// Parse a layer's `params` block.
+///
+/// ```kdl
+/// params {
+///     gpu      "which vendor driver to install" one-of="intel amd nvidia"
+///     monitors "one line per output"            list=#true
+///     ddc      "external monitor brightness over DDC/CI" default=#false
+/// }
+/// ```
+///
+/// The description is the first argument and is not optional: the point of the
+/// block is that somebody reading a host file can tell what a line means.
+/// `default=` is what makes a parameter optional -- a parameter with no
+/// default must be set by every host that enables the layer.
+fn params_from(node: &KdlNode, src: &str, path: &Path) -> Result<Vec<ParamDecl>> {
+    let Some(children) = node.children() else {
+        return Err(Error::Config(Box::new(ConfigError {
+            msg: "`params` needs a block".into(),
+            src: named(path, src),
+            span: (node.span().offset(), node.span().len()).into(),
+            label: "e.g. `params { gpu \"which driver\" one-of=\"intel amd\" }`".into(),
+        })));
+    };
+
+    let mut out = Vec::new();
+    for c in children.nodes() {
+        let name = c.name().value().to_string();
+        let span = (c.span().offset(), c.span().len());
+
+        let description = args(c).into_iter().next().ok_or_else(|| {
+            Error::Config(Box::new(ConfigError {
+                msg: format!("parameter '{name}' has no description"),
+                src: named(path, src),
+                span: span.into(),
+                label: "say what it means, in a string right after the name".into(),
+            }))
+        })?;
+
+        let prop = |key: &str| {
+            c.entries()
+                .iter()
+                .find(|e| e.name().is_some_and(|n| n.value() == key))
+                .map(|e| e.value())
+        };
+
+        let one_of: Vec<String> = match prop("one-of") {
+            Some(KdlValue::String(s)) => s.split_whitespace().map(str::to_string).collect(),
+            Some(_) => {
+                return Err(Error::Config(Box::new(ConfigError {
+                    msg: format!("'{name}': `one-of` takes a string of values"),
+                    src: named(path, src),
+                    span: span.into(),
+                    label: "e.g. one-of=\"intel amd nvidia\"".into(),
+                })))
+            }
+            None => Vec::new(),
+        };
+
+        let list = matches!(prop("list"), Some(KdlValue::Bool(true)));
+
+        let default = prop("default").map(|v| match v {
+            KdlValue::String(s) if s == "on" => Value::Bool(true),
+            KdlValue::String(s) if s == "off" => Value::Bool(false),
+            KdlValue::String(s) => Value::Str(s.clone()),
+            KdlValue::Integer(i) => Value::Int(*i as i64),
+            KdlValue::Bool(b) => Value::Bool(*b),
+            other => Value::Str(other.to_string()),
+        });
+
+        // A default outside its own list of allowed values is a typo that
+        // would otherwise only show up on the one host that omits the line.
+        if let (Some(d), false) = (&default, one_of.is_empty()) {
+            if !one_of.contains(&d.to_string()) {
+                return Err(Error::Config(Box::new(ConfigError {
+                    msg: format!("'{name}': the default is not one of the allowed values"),
+                    src: named(path, src),
+                    span: span.into(),
+                    label: format!("default is {d}, allowed: {}", one_of.join(", ")),
+                })));
+            }
+        }
+
+        out.push(ParamDecl {
+            name,
+            description,
+            default,
+            one_of,
+            list,
+            origin: Origin {
+                file: path.to_path_buf(),
+                line: line_of(src, c.span().offset()),
+            },
+        });
+    }
+    Ok(out)
+}
+
 /// Both `packages { foo; bar }` and `packages "foo" "bar"` are accepted.
 /// The block form is preferred because it allows a comment per line:
 ///
@@ -346,14 +492,21 @@ impl Host {
         let mut description = None;
         let mut layers = Vec::new();
         let mut params = BTreeMap::new();
+        let mut spans = BTreeMap::new();
+        let mut layers_span = (0, src.len().min(1));
 
         for node in doc.nodes() {
+            let span = (node.span().offset(), node.span().len());
             match node.name().value() {
                 "description" => description = value_of(node).map(|v| v.to_string()),
-                "layers" => layers = args(node),
+                "layers" => {
+                    layers = args(node);
+                    layers_span = span;
+                }
                 key => {
                     if let Some(v) = value_of(node) {
                         params.insert(key.to_string(), v);
+                        spans.insert(key.to_string(), span);
                     }
                 }
             }
@@ -373,12 +526,24 @@ impl Host {
             description,
             layers,
             params,
+            spans,
+            layers_span,
             origin: path.to_path_buf(),
         })
     }
 }
 
 impl Layer {
+    /// Every `when` this layer contains, whatever it guards.
+    pub fn conditions(&self) -> impl Iterator<Item = &Condition> {
+        self.packages
+            .iter()
+            .filter_map(|d| d.condition.as_ref())
+            .chain(self.services.iter().filter_map(|d| d.condition.as_ref()))
+            .chain(self.files.iter().filter_map(|d| d.condition.as_ref()))
+            .chain(self.hooks.iter().filter_map(|d| d.condition.as_ref()))
+    }
+
     fn parse(name: &str, path: &Path) -> Result<Layer> {
         let src = read(path)?;
         let doc: KdlDocument = src.parse()?;
@@ -387,6 +552,7 @@ impl Layer {
             name: name.to_string(),
             description: None,
             needs: Vec::new(),
+            params: Vec::new(),
             packages: Vec::new(),
             services: Vec::new(),
             files: Vec::new(),
@@ -415,6 +581,7 @@ fn collect(
                 layer.description = value_of(node).map(|v| v.to_string())
             }
             "needs" if cond.is_none() => layer.needs.extend(args(node)),
+            "params" if cond.is_none() => layer.params.extend(params_from(node, src, path)?),
             // There is no separate `aur` block. AUR packages live in the same
             // `packages` list: paru decides for itself what comes from a repo
             // and what from the AUR, so you need not track it while writing
@@ -456,6 +623,8 @@ fn collect(
                         KdlValue::String(s) => s.clone(),
                         other => other.to_string(),
                     },
+                    file: path.to_path_buf(),
+                    span: (node.span().offset(), node.span().len()),
                 };
                 if let Some(children) = node.children() {
                     collect(children, src, path, Some(inner), layer)?;
@@ -642,12 +811,20 @@ impl Config {
             self.expand(l, host, &mut ordered)?;
         }
 
+        let layers: Vec<&Layer> = ordered
+            .iter()
+            .map(|n| self.layers.get(n).expect("checked during expand"))
+            .collect();
+
+        let declared = declared_params(&layers);
+        let params = effective_params(host, &declared)?;
+        check_conditions(&layers, &declared)?;
+
         Ok(Resolved {
             host,
-            layers: ordered
-                .iter()
-                .map(|n| self.layers.get(n).expect("checked during expand"))
-                .collect(),
+            layers,
+            params,
+            declared,
         })
     }
 
@@ -680,6 +857,142 @@ impl Config {
 pub struct Resolved<'a> {
     pub host: &'a Host,
     pub layers: Vec<&'a Layer>,
+    /// The parameters as everything downstream sees them: what the host wrote,
+    /// plus defaults for anything it left out, plus `hostname`.
+    ///
+    /// Read this rather than `host.params`. The host file is what was written;
+    /// this is what applies.
+    pub params: BTreeMap<String, Value>,
+    /// Which layer declared each parameter. `check` uses it to name the layer
+    /// that wanted something, and `init` to write a new host file.
+    pub declared: BTreeMap<String, (String, ParamDecl)>,
+}
+
+/// Every parameter the enabled layers declare, by name.
+///
+/// Layers are visited in dependency order and the first declaration wins, so a
+/// base layer's description of a parameter is what a layer built on top of it
+/// inherits rather than silently redefines.
+fn declared_params(layers: &[&Layer]) -> BTreeMap<String, (String, ParamDecl)> {
+    let mut out: BTreeMap<String, (String, ParamDecl)> = BTreeMap::new();
+    for l in layers {
+        for p in &l.params {
+            out.entry(p.name.clone())
+                .or_insert_with(|| (l.name.clone(), p.clone()));
+        }
+    }
+    out
+}
+
+/// Combine what the host wrote with what the layers declared.
+///
+/// A parameter with no `default=` and no value in the host file is an error,
+/// not an empty string. There is no guessing anywhere else in this tool and
+/// there is none here: a machine that does not say which GPU it has should
+/// stop, not install the wrong driver.
+fn effective_params(
+    host: &Host,
+    declared: &BTreeMap<String, (String, ParamDecl)>,
+) -> Result<BTreeMap<String, Value>> {
+    let src = fs::read_to_string(&host.origin).unwrap_or_default();
+    let here = |key: &str| -> (usize, usize) { *host.spans.get(key).unwrap_or(&host.layers_span) };
+
+    // `hostname` comes from the file's name and nothing else. Letting a host
+    // file override it would mean /etc/hostname and the file it was resolved
+    // from could disagree.
+    if host.params.contains_key("hostname") {
+        return Err(Error::Config(Box::new(ConfigError {
+            msg: "`hostname` cannot be set as a parameter".into(),
+            src: named(&host.origin, &src),
+            span: here("hostname").into(),
+            label: "it comes from this file's name; remove the line".into(),
+        })));
+    }
+
+    let mut out = BTreeMap::new();
+
+    for (name, (layer, decl)) in declared {
+        match host.params.get(name) {
+            Some(v) => {
+                if !decl.one_of.is_empty() && !decl.one_of.contains(&v.to_string()) {
+                    return Err(Error::Config(Box::new(ConfigError {
+                        msg: format!("'{name}' is set to {v}, which is not one of its values"),
+                        src: named(&host.origin, &src),
+                        span: here(name).into(),
+                        label: format!("layer '{layer}' allows: {}", decl.one_of.join(", ")),
+                    })));
+                }
+                if decl.list && !matches!(v, Value::List(_)) {
+                    return Err(Error::Config(Box::new(ConfigError {
+                        msg: format!("'{name}' has to be written as a block"),
+                        src: named(&host.origin, &src),
+                        span: here(name).into(),
+                        label: format!(
+                            "layer '{layer}' reads it as a list -- write `{name} {{ \"...\" }}`, \
+                             because KDL cannot tell one string from a list of one"
+                        ),
+                    })));
+                }
+                out.insert(name.clone(), v.clone());
+            }
+            None => match &decl.default {
+                Some(d) => {
+                    out.insert(name.clone(), d.clone());
+                }
+                None => {
+                    return Err(Error::Config(Box::new(ConfigError {
+                        msg: format!("host '{}' does not set '{name}'", host.name),
+                        src: named(&host.origin, &src),
+                        span: host.layers_span.into(),
+                        label: format!("layer '{layer}' needs it: {}", decl.description),
+                    })))
+                }
+            },
+        }
+    }
+
+    // Anything the host set that no enabled layer declares is kept: a template
+    // may still read it, and a layer this host does not enable may declare it.
+    // `check` reports these rather than failing, because neither of those is
+    // necessarily a mistake.
+    for (k, v) in &host.params {
+        out.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+
+    out.insert("hostname".into(), Value::Str(host.name.clone()));
+    Ok(out)
+}
+
+/// Every `when` must test a parameter some enabled layer declares.
+///
+/// Before this, `when hostname="frodo"` and `when gpu="intle"` both did the
+/// same thing as a correct condition that happens not to hold: nothing, in
+/// silence. A condition that can never match is a typo, and typos should be
+/// loud.
+fn check_conditions(
+    layers: &[&Layer],
+    declared: &BTreeMap<String, (String, ParamDecl)>,
+) -> Result<()> {
+    for l in layers {
+        for c in l.conditions() {
+            if c.key == "hostname" || declared.contains_key(&c.key) {
+                continue;
+            }
+            let src = fs::read_to_string(&c.file).unwrap_or_default();
+            let known: Vec<&str> = declared.keys().map(String::as_str).collect();
+            return Err(Error::Config(Box::new(ConfigError {
+                msg: format!("no layer declares a parameter called '{}'", c.key),
+                src: named(&c.file, &src),
+                span: c.span.into(),
+                label: if known.is_empty() {
+                    "declare it in a `params` block first".into()
+                } else {
+                    format!("declared parameters: {}, hostname", known.join(", "))
+                },
+            })));
+        }
+    }
+    Ok(())
 }
 
 impl Resolved<'_> {
@@ -687,7 +1000,7 @@ impl Resolved<'_> {
     fn matches(&self, cond: &Option<Condition>) -> bool {
         match cond {
             None => true,
-            Some(c) => self.host.param(&c.key).is_some_and(|v| match v {
+            Some(c) => self.params.get(&c.key).is_some_and(|v| match v {
                 // Normalize booleans so that `when ddc=on` and
                 // `when ddc=#true` mean the same thing.
                 Value::Bool(b) => matches!(

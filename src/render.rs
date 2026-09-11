@@ -26,7 +26,10 @@ use crate::error::{Error, Result};
 /// The template variables available to a file's content.
 fn context(r: &Resolved<'_>, layer: &Layer, home: &std::path::Path, user: &str) -> JValue {
     let mut map = std::collections::BTreeMap::new();
-    for (k, v) in &r.host.params {
+    // The resolved parameters, not the host file's: a layer's `default=` has
+    // to reach a template as well, or a host that leaves a line out would
+    // render an empty value instead of the declared default.
+    for (k, v) in &r.params {
         let jv = match v {
             Value::Str(s) => JValue::from(s.clone()),
             Value::Int(i) => JValue::from(*i),
@@ -35,7 +38,6 @@ fn context(r: &Resolved<'_>, layer: &Layer, home: &std::path::Path, user: &str) 
         };
         map.insert(k.clone(), jv);
     }
-    map.insert("hostname".into(), JValue::from(r.host.name.clone()));
     map.insert("layer".into(), JValue::from(layer.name.clone()));
     // Needed by anything that has to write an absolute path into a file --
     // .desktop Exec lines and config formats that do not expand `~`.

@@ -57,6 +57,27 @@ pub enum Command {
         path: Option<PathBuf>,
     },
 
+    /// Write a host file for a new machine.
+    ///
+    /// The layers you choose decide what has to be in it: lami asks them what
+    /// they need to know, and writes those parameters out with their
+    /// descriptions and defaults already in place. Nothing is guessed -- the
+    /// required ones are left blank for you to fill in.
+    Init {
+        /// The machine's hostname. The file is named after it, and that name
+        /// is what `lami diff` looks for on the machine itself.
+        name: String,
+
+        /// Which layers it gets. Their `needs` are added automatically.
+        #[arg(long, value_delimiter = ',', required = true)]
+        layers: Vec<String>,
+
+        /// Start from another host's answers, for a machine much like one you
+        /// already have.
+        #[arg(long)]
+        like: Option<String>,
+    },
+
     /// Fast-forward the config repo to its remote.
     ///
     /// Uncommitted local changes are left alone; a diverged history is

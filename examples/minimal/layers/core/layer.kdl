@@ -1,5 +1,16 @@
 description "Base system: boot, filesystem, network"
 
+// What this layer needs to know about the machine.
+//
+// Every host that enables the layer has to answer these, and `lami init`
+// writes them into a new host file for you. A parameter with a `default=` is
+// optional; one without is not, and a host that leaves it out is an error
+// rather than a guess.
+params {
+    ucode       "CPU microcode package"          one-of="intel amd none"
+    cpu_threads "how many jobs makepkg may run"  default=4
+}
+
 packages {
     base
     base-devel

@@ -149,6 +149,7 @@ fn main() -> Result<()> {
         Command::Pull | Command::Push { .. } => {
             unreachable!("handled before the config is loaded")
         }
+        Command::Init { name, layers, like } => cmd_init(&cfg, &name, &layers, like.as_deref())?,
         Command::List => cmd_list(&cfg),
         Command::Show => cmd_show(&cfg, cli.host.unwrap_or_else(hostname))?,
         Command::Why { target } => cmd_why(&cfg, cli.host.unwrap_or_else(hostname), &target)?,
@@ -206,6 +207,209 @@ fn cmd_list(cfg: &Config) {
         let desc = l.description.as_deref().unwrap_or("");
         println!("  {:<12} {}", l.name, desc);
     }
+}
+
+/// Write a host file for a new machine.
+///
+/// The value is not the file -- it is that the layers are asked what they need
+/// to know, so the new host file arrives already listing every parameter that
+/// has to be answered, with the description the layer gave it. Copying an
+/// existing host file instead means inheriting its answers along with any
+/// parameter that has since stopped mattering.
+fn cmd_init(cfg: &Config, name: &str, layers: &[String], like: Option<&str>) -> Result<(), Error> {
+    let file = cfg.dir.join("hosts").join(format!("{name}.kdl"));
+    if file.exists() {
+        return Err(Error::Other(format!(
+            "{} already exists.\n\
+             Remove it first if you mean to start over.",
+            file.display()
+        )));
+    }
+
+    // Expand `needs`, keeping dependency order, so the parameters come out in
+    // the order the layers were built in rather than alphabetically.
+    let mut ordered: Vec<String> = Vec::new();
+    for l in layers {
+        expand_for_init(cfg, l, &mut ordered)?;
+    }
+    let resolved: Vec<&config::Layer> = ordered
+        .iter()
+        .map(|n| cfg.layers.get(n).expect("checked while expanding"))
+        .collect();
+
+    let borrowed: Vec<&str> = layers.iter().map(String::as_str).collect();
+    let previous = match like {
+        Some(h) => Some(cfg.resolve(h)?),
+        None => None,
+    };
+
+    let mut required: Vec<(&str, &config::ParamDecl)> = Vec::new();
+    let mut optional: Vec<(&str, &config::ParamDecl)> = Vec::new();
+    let mut seen: std::collections::BTreeSet<&str> = Default::default();
+    for l in &resolved {
+        for p in &l.params {
+            if !seen.insert(p.name.as_str()) {
+                continue;
+            }
+            if p.default.is_some() {
+                optional.push((&l.name, p));
+            } else {
+                required.push((&l.name, p));
+            }
+        }
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "description \"TODO: what this machine is\"\n\n\
+         // The layers this host gets. Their dependencies are added\n\
+         // automatically, so `needs` never has to be repeated here.\n\
+         layers {}\n",
+        borrowed
+            .iter()
+            .map(|l| format!("\"{l}\""))
+            .collect::<Vec<_>>()
+            .join(" ")
+    ));
+
+    if !required.is_empty() {
+        out.push_str(
+            "\n// Required. Every one of these has to be answered before\n\
+             // `lami diff` will run: there is no default profile here.\n",
+        );
+        for (layer, p) in &required {
+            out.push_str(&format!("\n// {} ({layer})\n", p.description));
+            if !p.one_of.is_empty() {
+                out.push_str(&format!("// one of: {}\n", p.one_of.join(" ")));
+            }
+            let existing = previous
+                .as_ref()
+                .and_then(|r| r.host.params.get(p.name.as_str()));
+            out.push_str(&param_line(&p.name, existing, p.list));
+        }
+    }
+
+    if !optional.is_empty() {
+        out.push_str(
+            "\n// Optional: these have defaults, shown here commented out.\n\
+             // Uncomment a line only to change it -- a line you leave out\n\
+             // means the layer's default, which is the same thing.\n",
+        );
+        for (layer, p) in &optional {
+            out.push_str(&format!("\n// {} ({layer})\n", p.description));
+            if !p.one_of.is_empty() {
+                out.push_str(&format!("// one of: {}\n", p.one_of.join(" ")));
+            }
+            let d = p.default.as_ref().expect("optional means it has one");
+            out.push_str(&format!(
+                "// {}\n",
+                param_line(&p.name, Some(d), p.list).trim_end()
+            ));
+        }
+    }
+
+    std::fs::create_dir_all(file.parent().expect("hosts/ has a parent")).map_err(|source| {
+        Error::Io {
+            path: file.parent().unwrap().to_path_buf(),
+            source,
+        }
+    })?;
+    std::fs::write(&file, &out).map_err(|source| Error::Io {
+        path: file.clone(),
+        source,
+    })?;
+
+    println!("{}", color::bold(&format!("wrote {}", file.display())));
+    println!(
+        "  {}",
+        color::dim(&format!(
+            "layers: {} ({} after `needs`)",
+            borrowed.join(", "),
+            resolved.len()
+        ))
+    );
+    let copied = |p: &config::ParamDecl| {
+        previous
+            .as_ref()
+            .is_some_and(|r| r.host.params.contains_key(p.name.as_str()))
+    };
+    let blank: Vec<&(&str, &config::ParamDecl)> =
+        required.iter().filter(|(_, p)| !copied(p)).collect();
+
+    let describe = |layer: &str, p: &config::ParamDecl| {
+        let allowed = if p.one_of.is_empty() {
+            String::new()
+        } else {
+            format!("  [{}]", p.one_of.join(" "))
+        };
+        format!(
+            "  {:<14} {}{}",
+            p.name,
+            color::dim(&format!("{layer}: {}", p.description)),
+            color::dim(&allowed)
+        )
+    };
+
+    if let Some(from) = like {
+        let taken = required.len() - blank.len();
+        if taken > 0 {
+            println!(
+                "  {}",
+                color::dim(&format!(
+                    "{taken} answer(s) copied from {from} -- check them"
+                ))
+            );
+        }
+    }
+
+    if blank.is_empty() {
+        println!("\nNext: lami diff --host {name}");
+    } else {
+        println!("\n{}", color::bold("to fill in:"));
+        for (layer, p) in &blank {
+            println!("{}", describe(layer, p));
+        }
+        println!("\nThen: lami diff --host {name}");
+    }
+    Ok(())
+}
+
+/// One `name value` line, in the spelling the parser expects back.
+fn param_line(name: &str, value: Option<&config::Value>, list: bool) -> String {
+    match value {
+        Some(config::Value::List(items)) => {
+            let body: String = items.iter().map(|i| format!("    \"{i}\"\n")).collect();
+            format!("{name} {{\n{body}}}\n")
+        }
+        // A list parameter written as a bare string would be read as a string:
+        // KDL cannot tell one from a list of one, so the block form is the
+        // only correct empty value.
+        None if list => format!("{name} {{\n    \"\"\n}}\n"),
+        Some(config::Value::Int(i)) => format!("{name} {i}\n"),
+        Some(config::Value::Bool(b)) => {
+            format!("{name} {}\n", if *b { "on" } else { "off" })
+        }
+        Some(v) => format!("{name} \"{v}\"\n"),
+        None => format!("{name} \"\"\n"),
+    }
+}
+
+/// Layer expansion for `init`, which has no host to blame an unknown name on.
+fn expand_for_init(cfg: &Config, name: &str, out: &mut Vec<String>) -> Result<(), Error> {
+    if out.iter().any(|n| n == name) {
+        return Ok(());
+    }
+    let layer = cfg.layers.get(name).ok_or_else(|| {
+        Error::Other(format!(
+            "no layer called '{name}'.\nKnown layers: {}",
+            cfg.layers.keys().cloned().collect::<Vec<_>>().join(", ")
+        ))
+    })?;
+    for dep in &layer.needs {
+        expand_for_init(cfg, dep, out)?;
+    }
+    out.push(name.to_string());
+    Ok(())
 }
 
 /// Clone the config repo and record where it went.
@@ -291,8 +495,32 @@ fn cmd_show(cfg: &Config, host: String) -> Result<(), Error> {
     }
 
     println!("\n{}", color::bold("parameters:"));
-    for (k, v) in &r.host.params {
-        println!("  {k:<14} {v}");
+    let wide = r
+        .params
+        .keys()
+        .map(|k| k.len())
+        .max()
+        .unwrap_or(0)
+        .clamp(8, 20);
+    for (k, v) in &r.params {
+        if k == "hostname" {
+            continue;
+        }
+        let value = v.to_string();
+        let note = match r.declared.get(k) {
+            Some((layer, decl)) => {
+                let from_default = !r.host.params.contains_key(k);
+                color::dim(&format!(
+                    "{}{layer}: {}",
+                    if from_default { "default, " } else { "" },
+                    decl.description
+                ))
+            }
+            // Not an error: a template may read it, or a layer this host does
+            // not enable may declare it. But it should not be invisible.
+            None => color::changed("no enabled layer declares this"),
+        };
+        println!("  {k:<wide$}  {value:<18}  {note}");
     }
 
     println!(
@@ -435,6 +663,30 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
 fn cmd_check(cfg: &Config, host: String) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
     println!("{}\n", color::bold(&format!("host: {}", r.host.name)));
+
+    // Anything the host answers that nothing asked. Resolving already rejects
+    // the opposite case -- a layer that needs something the host never set --
+    // so this is the half that cannot be an error: the parameter may be read
+    // by a template, or by a layer this host does not currently enable.
+    let unread: Vec<&String> = r
+        .host
+        .params
+        .keys()
+        .filter(|k| !r.declared.contains_key(*k))
+        .collect();
+    if !unread.is_empty() {
+        println!("{}", color::changed("parameters nothing reads:"));
+        for k in &unread {
+            println!("  {k}");
+        }
+        println!(
+            "{}\n",
+            color::dim(
+                "  No enabled layer declares these. Either a layer should say it\n\
+                 \x20 needs them in its `params` block, or the lines can go."
+            )
+        );
+    }
 
     if !pacman::available() {
         println!("pacman is not available, skipping the package check.");
