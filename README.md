@@ -203,6 +203,34 @@ A hook only runs when one of the files it watches actually changes.
 Use `cpu_threads`, not `cpu-threads`: parameter names reach templates verbatim,
 and a hyphen would be read as subtraction.
 
+## One-off steps
+
+Every converging system has the same blind spot: the thing that has to happen
+exactly once and cannot be described as a state.
+
+```kdl
+migration "sensors-detect" from="scripts/sensors-detect.sh"
+    because="hardware detection: writes HWMON_MODULES, which nothing else knows"
+```
+
+`because=` is required. A step that runs once and is never seen again has to
+explain itself where it is declared, or nothing does.
+
+It is keyed by **name**, not by the script's path or its contents: moving or
+editing the file does not re-run it. To make one run again, give it a new name
+— which is also a truthful record, since under a new name it is a different
+step. `lami check` reports a migration whose script has been edited since it
+ran, because otherwise the repo and the machine quietly disagree about what
+happened.
+
+Migrations run last, after packages, groups, files, services and hooks, as
+root, with the layer's directory as the working directory and `LAMI_HOST`,
+`LAMI_USER` and `LAMI_HOME` in the environment. The script is executed
+directly, so its shebang picks the interpreter.
+
+Each is recorded the moment it succeeds. If the third of five fails, the first
+two are not tried again — and the one that failed is not recorded, so it is.
+
 ## Rendering
 
 Nothing is installed — you just look at what *would* be:

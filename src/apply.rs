@@ -382,6 +382,42 @@ pub fn run_apply(
     // --- hooks ------------------------------------------------------------
     run_hooks(&report, |_| true)?;
 
+    // --- migrations -------------------------------------------------------
+    //
+    // After everything else: a one-off step is the thing most likely to need
+    // the packages installed, the files written and the units enabled first.
+    //
+    // Each is recorded the moment it succeeds, not at the end. If the third of
+    // five fails, the first two must not be tried again next time.
+    let pending: Vec<&str> = report
+        .changes
+        .iter()
+        .filter_map(|c| match c {
+            Change::RunMigration { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    if !pending.is_empty() {
+        println!("{}", crate::color::bold("migrations:"));
+        for (layer, m) in r.migrations() {
+            if !pending.contains(&m.name.as_str()) {
+                continue;
+            }
+            println!("  {}   {}", m.name, crate::color::dim(&m.because));
+            crate::migrate::run(
+                &m.script,
+                &layer.dir,
+                &r.host.name,
+                &actor.name,
+                &actor.home,
+            )?;
+            let mut st = crate::state::load();
+            st.migrations
+                .insert(m.name.clone(), crate::migrate::checksum(&m.script)?);
+            crate::state::save(&st)?;
+        }
+    }
+
     // Last, so it is the thing still on screen when apply finishes.
     diff::print_problems(&report.problems);
 
@@ -392,8 +428,12 @@ pub fn run_apply(
 /// Remember what is managed now, so that a later `prune` can tell "no longer
 /// declared" apart from "never declared".
 fn record_state(r: &Resolved<'_>, actor: &Actor) -> Result<()> {
+    // Started from what is already recorded, because the migration log is
+    // history rather than a picture of the present: rebuilding it from the
+    // config would forget everything that has ever run.
     let mut st = crate::state::State {
         host: r.host.name.clone(),
+        migrations: crate::state::load().migrations,
         ..Default::default()
     };
     for (_, d) in r.packages() {

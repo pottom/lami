@@ -234,6 +234,28 @@ pub struct FileDecl {
     pub condition: Option<Condition>,
 }
 
+/// A one-off imperative step.
+///
+/// Every converging system has this blind spot: the thing that has to happen
+/// exactly once and cannot be described as a state. Hardware detection that
+/// writes a file only it knows the contents of; an interactive installer; a
+/// step that only works after something else has run at least once.
+///
+/// Keyed by `name`, not by the script's path or contents: renaming the file
+/// must not re-run it. To make one run again, give it a new name -- which is
+/// also a truthful record, since it is then a different step.
+#[derive(Debug, Clone)]
+pub struct Migration {
+    pub name: String,
+    /// The script, relative to the layer directory.
+    pub script: PathBuf,
+    /// Required. A one-off that does not say why it exists is the worst kind
+    /// of thing to find in a config a year later.
+    pub because: String,
+    pub origin: Origin,
+    pub condition: Option<Condition>,
+}
+
 /// A command to run when one of the watched paths changes.
 #[derive(Debug, Clone)]
 pub struct Hook {
@@ -258,6 +280,7 @@ pub struct Layer {
     pub services: Vec<UnitDecl>,
     pub files: Vec<FileDecl>,
     pub hooks: Vec<Hook>,
+    pub migrations: Vec<Migration>,
     /// The layer's own directory, which `from=` paths are relative to.
     pub dir: PathBuf,
     pub path: PathBuf,
@@ -547,6 +570,7 @@ impl Layer {
             .chain(self.services.iter().filter_map(|d| d.condition.as_ref()))
             .chain(self.files.iter().filter_map(|d| d.condition.as_ref()))
             .chain(self.hooks.iter().filter_map(|d| d.condition.as_ref()))
+            .chain(self.migrations.iter().filter_map(|d| d.condition.as_ref()))
     }
 
     fn parse(name: &str, path: &Path) -> Result<Layer> {
@@ -563,6 +587,7 @@ impl Layer {
             services: Vec::new(),
             files: Vec::new(),
             hooks: Vec::new(),
+            migrations: Vec::new(),
             dir: path.parent().unwrap_or(Path::new(".")).to_path_buf(),
             path: path.to_path_buf(),
         };
@@ -651,6 +676,52 @@ fn collect(
                 for decl in parse_dir(node, src, path, cond.as_ref(), &layer.dir)? {
                     layer.files.push(decl);
                 }
+            }
+            "migration" => {
+                let name = args(node).into_iter().next().ok_or_else(|| {
+                    Error::Config(Box::new(ConfigError {
+                        msg: "`migration` needs a name".into(),
+                        src: named(path, src),
+                        span: (node.span().offset(), node.span().len()).into(),
+                        label: "e.g. `migration \"sensors-detect\" from=\"...\" because=\"...\"`"
+                            .into(),
+                    }))
+                })?;
+                let prop = |key: &str| {
+                    node.entries()
+                        .iter()
+                        .find(|e| e.name().is_some_and(|n| n.value() == key))
+                        .and_then(|e| e.value().as_string())
+                        .map(str::to_string)
+                };
+                let script = prop("from").ok_or_else(|| {
+                    Error::Config(Box::new(ConfigError {
+                        msg: format!("migration '{name}' has no script"),
+                        src: named(path, src),
+                        span: (node.span().offset(), node.span().len()).into(),
+                        label: "from=\"migrations/something.sh\", relative to this layer".into(),
+                    }))
+                })?;
+                let because = prop("because").ok_or_else(|| {
+                    Error::Config(Box::new(ConfigError {
+                        msg: format!("migration '{name}' does not say why it exists"),
+                        src: named(path, src),
+                        span: (node.span().offset(), node.span().len()).into(),
+                        label: "because=\"...\" -- a one-off that runs once and is never \
+                                seen again has to explain itself here"
+                            .into(),
+                    }))
+                })?;
+                layer.migrations.push(Migration {
+                    name,
+                    script: layer.dir.join(script),
+                    because,
+                    origin: Origin {
+                        file: path.to_path_buf(),
+                        line: line_of(src, node.span().offset()),
+                    },
+                    condition: cond.clone(),
+                });
             }
             "on-change" => {
                 let watch = args(node);
@@ -1040,6 +1111,19 @@ impl Resolved<'_> {
                     *slot = (*layer, f);
                 } else {
                     out.push((*layer, f));
+                }
+            }
+        }
+        out
+    }
+
+    /// The one-off steps that apply to this host, in layer order.
+    pub fn migrations(&self) -> Vec<(&Layer, &Migration)> {
+        let mut out = Vec::new();
+        for layer in &self.layers {
+            for m in &layer.migrations {
+                if self.matches(&m.condition) {
+                    out.push((*layer, m));
                 }
             }
         }

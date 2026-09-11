@@ -410,6 +410,36 @@ It runs only when that file actually changes.
 
 ---
 
+### One-off steps
+
+Some things happen once and cannot be described as a state: hardware detection
+that writes a file only it knows the contents of, an interactive installer, a
+step that only works after something else has run at least once.
+
+```kdl
+migration "sensors-detect" from="scripts/sensors-detect.sh"
+    because="writes HWMON_MODULES into /etc/conf.d/lm_sensors -- nothing else knows it"
+```
+
+Declared in the layer it belongs to, so a machine only gets the one-offs its
+own layers bring. It is keyed by the name: moving or editing the script does
+not re-run it, and giving it a new name is how you ask for it to happen again.
+
+```
+$ lami why sensors-detect
+sensors-detect  (migration)
+  declared:   layers/gui/layer.kdl:74
+  applies:    layer 'gui'
+  script:     layers/gui/scripts/sensors-detect.sh
+  because:    writes HWMON_MODULES into /etc/conf.d/lm_sensors
+  status:     already run on this machine
+```
+
+They run last, as root, with the layer's directory as the working directory
+and `LAMI_HOST`, `LAMI_USER`, `LAMI_HOME` set. Write them to be safe to run
+twice anyway: the record protects them, but a lost state file should not be a
+disaster.
+
 ## 5. Apply
 
 Always look first:

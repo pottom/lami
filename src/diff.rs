@@ -44,6 +44,12 @@ pub enum Change {
         want: String,
         have: String,
     },
+    /// A one-off step that has never run on this machine.
+    RunMigration {
+        name: String,
+        layer: String,
+        because: String,
+    },
     /// A watched file will change, so this command has to run afterwards.
     RunHook {
         run: String,
@@ -65,6 +71,7 @@ impl Change {
             | Change::UpdateFile { .. }
             | Change::FixPermissions { .. } => "files",
             Change::RunHook { .. } => "hooks",
+            Change::RunMigration { .. } => "migrations",
         }
     }
 
@@ -87,6 +94,7 @@ impl Change {
             Change::UpdateFile { .. } => "write",
             Change::FixPermissions { .. } => "chmod",
             Change::RunHook { .. } => "run",
+            Change::RunMigration { .. } => "run",
         }
     }
 
@@ -104,6 +112,7 @@ impl Change {
             | Change::UpdateFile { path, .. }
             | Change::FixPermissions { path, .. } => path.clone(),
             Change::RunHook { run, .. } => run.clone(),
+            Change::RunMigration { name, .. } => name.clone(),
         }
     }
 
@@ -139,6 +148,7 @@ impl Change {
                 layer, want, have, ..
             } => format!("from {layer}, mode is {have}, should be {want}"),
             Change::RunHook { because, .. } => format!("because {because} changes"),
+            Change::RunMigration { layer, because, .. } => format!("{layer}: {because}"),
         }
     }
 
@@ -154,9 +164,10 @@ impl Change {
                 _ => changed(s),
             },
             Change::UpdateFile { .. } | Change::FixPermissions { .. } => changed(s),
-            Change::RunHook { .. } | Change::DaemonReload { .. } | Change::RestartUnit { .. } => {
-                action(s)
-            }
+            Change::RunMigration { .. }
+            | Change::RunHook { .. }
+            | Change::DaemonReload { .. }
+            | Change::RestartUnit { .. } => action(s),
         }
     }
 
@@ -469,12 +480,30 @@ pub fn compute(
         }
     }
 
-    // Group by kind so the output reads in sections rather than as a jumble.
+    // --- migrations -------------------------------------------------------
+    // Last, because a one-off step is the thing most likely to depend on
+    // everything else being in place first.
+    let done = crate::state::load().migrations;
+    for (layer, m) in r.migrations() {
+        if done.contains_key(&m.name) {
+            continue;
+        }
+        changes.push(Change::RunMigration {
+            name: m.name.clone(),
+            layer: layer.name.clone(),
+            because: m.because.clone(),
+        });
+    }
+
+    // Group by kind so the output reads in sections rather than as a jumble,
+    // in the order apply carries them out.
     changes.sort_by_key(|c| match c.kind() {
         "packages" => 0,
-        "files" => 1,
-        "services" => 2,
-        _ => 3,
+        "groups" => 1,
+        "files" => 2,
+        "services" => 3,
+        "hooks" => 4,
+        _ => 5,
     });
 
     Ok(Report {

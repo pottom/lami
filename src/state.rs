@@ -9,7 +9,7 @@
 //! easy to repair by hand if it ever goes wrong. State that only the tool can
 //! read is state you cannot recover from.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
@@ -28,6 +28,11 @@ pub struct State {
     /// Group memberships a previous apply added. A group somebody joined by
     /// hand is never in here, and so is never a candidate for prune.
     pub groups: BTreeSet<String>,
+    /// Migrations that have run, by name, with the checksum of the script as
+    /// it was at the time. The checksum is not what decides whether to run --
+    /// the name is -- but it lets `check` say that the script has been edited
+    /// since, which is otherwise impossible to notice.
+    pub migrations: BTreeMap<String, String>,
     pub host: String,
 }
 
@@ -46,23 +51,34 @@ fn encode(s: &State) -> String {
             .join(",\n")
     };
     format!(
-        "{{\n  \"host\": \"{}\",\n  \"packages\": [\n{}\n  ],\n  \"groups\": [\n{}\n  ],\n  \"files\": [\n{}\n  ],\n  \"services\": [\n{}\n  ],\n  \"user_services\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"host\": \"{}\",\n  \"packages\": [\n{}\n  ],\n  \"groups\": [\n{}\n  ],\n  \"files\": [\n{}\n  ],\n  \"services\": [\n{}\n  ],\n  \"user_services\": [\n{}\n  ],\n  \"migrations\": {{\n{}\n  }}\n}}\n",
         s.host,
         arr(&s.packages),
         arr(&s.groups),
         arr(&s.files),
         arr(&s.services),
-        arr(&s.user_services)
+        arr(&s.user_services),
+        s.migrations
+            .iter()
+            .map(|(k, v)| format!("    \"{k}\": \"{v}\""))
+            .collect::<Vec<_>>()
+            .join(",\n")
     )
 }
 
 fn decode(text: &str) -> State {
     let mut st = State::default();
     let mut section: Option<&mut BTreeSet<String>> = None;
+    let mut in_migrations = false;
     for line in text.lines() {
         let t = line.trim();
         if t.starts_with("\"host\"") {
             st.host = t.split('"').nth(3).unwrap_or("").to_string();
+            continue;
+        }
+        if t.starts_with("\"migrations\"") {
+            in_migrations = true;
+            section = None;
             continue;
         }
         // user_services before services: the latter is a prefix of the
@@ -75,6 +91,7 @@ fn decode(text: &str) -> State {
             ("groups", 4),
         ] {
             if t.starts_with(&format!("\"{key}\"")) {
+                in_migrations = false;
                 section = Some(match which {
                     0 => &mut st.packages,
                     1 => &mut st.files,
@@ -84,6 +101,18 @@ fn decode(text: &str) -> State {
                 });
                 break;
             }
+        }
+        // A migrations entry is `"name": "checksum"`, which the array branch
+        // below deliberately skips.
+        if in_migrations && t.starts_with('"') && t.contains("\": \"") {
+            let mut parts = t.trim_end_matches(',').split("\": \"");
+            if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
+                st.migrations.insert(
+                    k.trim_matches('"').to_string(),
+                    v.trim_matches('"').to_string(),
+                );
+            }
+            continue;
         }
         if t.starts_with('"') && !t.contains(": ") {
             if let Some(set) = section.as_deref_mut() {
@@ -134,11 +163,14 @@ mod tests {
         s.services.insert("greetd.service".into());
         s.user_services.insert("wireplumber.service".into());
         s.groups.insert("libvirt".into());
+        s.migrations
+            .insert("sensors-detect".into(), "abc123".into());
 
         let back = decode(&encode(&s));
         assert_eq!(back.host, "frodo");
         assert_eq!(back.packages, s.packages);
         assert_eq!(back.groups, s.groups);
+        assert_eq!(back.migrations, s.migrations);
         assert_eq!(back.files, s.files);
         assert_eq!(back.services, s.services);
         assert_eq!(back.user_services, s.user_services);

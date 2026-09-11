@@ -8,6 +8,7 @@ mod config;
 mod diff;
 mod error;
 mod groups;
+mod migrate;
 mod pacman;
 mod perms;
 mod render;
@@ -543,6 +544,10 @@ fn cmd_show(cfg: &Config, host: String) -> Result<(), Error> {
     println!("  packages   {}", r.packages().len());
     println!("  groups     {}", r.groups().len());
     println!("  services   {}", r.services().len());
+    let m = r.migrations().len();
+    if m > 0 {
+        println!("  migrations {m}");
+    }
     Ok(())
 }
 
@@ -550,6 +555,33 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
 
     let mut found = false;
+
+    for (layer, m) in r.migrations() {
+        if m.name != target {
+            continue;
+        }
+        found = true;
+        let done = state::load().migrations;
+        println!("{}  {}", color::bold(&m.name), color::dim("(migration)"));
+        println!("  declared:   {}", m.origin);
+        println!("  applies:    layer '{}'", layer.name);
+        println!("  script:     {}", m.script.display());
+        println!("  because:    {}", m.because);
+        match done.get(&m.name) {
+            Some(recorded) => {
+                let now = crate::migrate::checksum(&m.script).unwrap_or_default();
+                if now == *recorded {
+                    println!("  status:     already run on this machine");
+                } else {
+                    println!(
+                        "  status:     ran on this machine, but the script has been edited since"
+                    );
+                }
+            }
+            None => println!("  status:     has not run on this machine"),
+        }
+        println!();
+    }
     for (kind, items) in [("package", r.packages()), ("group", r.groups())] {
         for (layer, decl) in items {
             if decl.name != target {
@@ -667,6 +699,34 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
 fn cmd_check(cfg: &Config, host: String) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
     println!("{}\n", color::bold(&format!("host: {}", r.host.name)));
+
+    // A migration that has run and has since been edited. Not an error and
+    // not something to re-run behind your back -- a one-off is a one-off --
+    // but the repo and the machine now disagree about what actually happened,
+    // and only this can tell you.
+    let done = state::load().migrations;
+    let edited: Vec<(&str, &str)> = r
+        .migrations()
+        .into_iter()
+        .filter_map(|(_, m)| {
+            let recorded = done.get(&m.name)?;
+            let now = crate::migrate::checksum(&m.script).ok()?;
+            (now != *recorded).then_some((m.name.as_str(), m.because.as_str()))
+        })
+        .collect();
+    if !edited.is_empty() {
+        println!("{}", color::changed("migrations edited since they ran:"));
+        for (name, because) in &edited {
+            println!("  {name}   {}", color::dim(because));
+        }
+        println!(
+            "{}\n",
+            color::dim(
+                "  They will not run again: a one-off is keyed by its name, so renaming\n\
+                 \x20 one is how you ask for it to happen a second time."
+            )
+        );
+    }
 
     // Anything the host answers that nothing asked. Resolving already rejects
     // the opposite case -- a layer that needs something the host never set --
