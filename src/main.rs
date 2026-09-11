@@ -928,6 +928,24 @@ fn cmd_diff(cfg: &Config, host: String, show_undeclared: bool) -> Result<(), Err
                 report.undeclared_packages.len()
             );
         }
+
+        // The same question for group membership, which is otherwise invisible
+        // in both directions: apply does not remove it and prune only touches
+        // what lami added, so a membership from some forgotten manual step
+        // could sit there forever with nothing ever mentioning it.
+        println!("\na member of, but declared by no layer:");
+        if report.undeclared_groups.is_empty() {
+            println!("  (none)");
+        } else {
+            for g in &report.undeclared_groups {
+                println!("  {g}");
+            }
+            println!(
+                "\n{} group(s), primary group excluded. Either a layer should declare\n\
+                 them, or they are left over from a manual step and nothing needs them.",
+                report.undeclared_groups.len()
+            );
+        }
     }
     Ok(())
 }

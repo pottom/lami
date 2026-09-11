@@ -52,6 +52,17 @@ pub fn existing() -> Result<BTreeSet<String>> {
         .collect())
 }
 
+/// The user's primary group, which comes with the account rather than being a
+/// decision somebody made. Left out of the undeclared listing for that reason.
+pub fn primary(user: &str) -> Option<String> {
+    let out = Command::new("id").args(["-gn", user]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
 pub fn available() -> bool {
     Command::new("id")
         .arg("-nG")

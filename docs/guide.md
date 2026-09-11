@@ -142,6 +142,18 @@ Three things worth knowing:
 - **`prune` only removes what lami added.** A group you joined by hand never
   reached the state file, so it is never a candidate.
 
+Which leaves the memberships nothing accounts for. `lami diff --undeclared`
+lists those too, primary group excluded:
+
+```
+a member of, but declared by no layer:
+  i2c
+```
+
+That one is real: it is left over from a manual step on the machine this was
+written on, and the layer that would have wanted it says in a comment that the
+membership is not needed at all.
+
 ### Conditions
 
 Machines differ. Say so where it belongs, in the layer:

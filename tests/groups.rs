@@ -171,3 +171,27 @@ fn a_conditional_group_follows_the_parameter() {
 
     fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn a_membership_no_layer_declares_is_listed_on_request() {
+    // Otherwise it is invisible in both directions: apply does not remove a
+    // membership and prune only touches one lami added, so something left
+    // over from a forgotten manual step would sit there with nothing ever
+    // mentioning it.
+    let f = Fixture::new("undeclared", "");
+    let (out, ok) = f.run(&["diff", "--undeclared"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("declared by no layer"), "{out}");
+
+    // The primary group comes with the account rather than being a decision,
+    // so it is not on the list.
+    let primary = a_group_i_am_in();
+    let section = out
+        .split("a member of, but declared by no layer:")
+        .nth(1)
+        .unwrap_or("");
+    assert!(
+        !section.lines().any(|l| l.trim() == primary),
+        "primary group {primary} should be excluded:\n{out}"
+    );
+}

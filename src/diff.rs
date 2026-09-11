@@ -217,6 +217,9 @@ pub struct Report {
     /// Explicitly installed packages that no layer declares. Never removed by
     /// `apply`; this is what `capture` offers to file into a layer.
     pub undeclared_packages: Vec<String>,
+    /// Group memberships no layer declares. The primary group is left out: it
+    /// comes with the account and is not a choice anybody made.
+    pub undeclared_groups: Vec<String>,
     pub skipped: Vec<String>,
     /// Things the config asks for that lami cannot do anything about, and
     /// which would otherwise pass silently. A declared unit that does not
@@ -264,6 +267,7 @@ pub fn compute(
 ) -> Result<Report> {
     let mut changes: Vec<Change> = Vec::new();
     let mut undeclared_packages = Vec::new();
+    let mut undeclared_groups = Vec::new();
     let mut skipped = Vec::new();
     let mut problems = Vec::new();
 
@@ -306,6 +310,14 @@ pub fn compute(
     if crate::groups::available() {
         let mine = crate::groups::of_user(user)?;
         let all = crate::groups::existing()?;
+        let declared: std::collections::BTreeSet<&str> =
+            r.groups().iter().map(|(_, d)| d.name.as_str()).collect();
+        let primary = crate::groups::primary(user);
+        undeclared_groups = mine
+            .iter()
+            .filter(|g| !declared.contains(g.as_str()) && Some(g.as_str()) != primary.as_deref())
+            .cloned()
+            .collect();
         for (layer, d) in r.groups() {
             if mine.contains(&d.name) {
                 continue;
@@ -468,6 +480,7 @@ pub fn compute(
     Ok(Report {
         changes,
         undeclared_packages,
+        undeclared_groups,
         skipped,
         problems,
     })
