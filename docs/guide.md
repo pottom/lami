@@ -120,6 +120,28 @@ Package names go in one list whether they come from a repository or the AUR —
 lami works that out from pacman's database, so you do not have to track it.
 `lami check` confirms it and tells you if an AUR helper is missing.
 
+### Groups
+
+```kdl
+groups {
+    libvirt     // manage VMs without a password prompt for every action
+    wireshark   // capture without running the whole GUI as root
+}
+```
+
+Whose groups: yours — the user running lami, which is the only actor it has.
+
+Three things worth knowing:
+
+- **lami never creates a group.** The package that needs one creates it, with
+  the right gid. A declared group that does not exist is reported as a
+  problem, not quietly invented.
+- **A new membership takes effect at the next login.** The session that ran
+  `apply` still does not have it. lami says so, because otherwise the first
+  thing that fails afterwards looks like the step not having worked.
+- **`prune` only removes what lami added.** A group you joined by hand never
+  reached the state file, so it is never a candidate.
+
 ### Conditions
 
 Machines differ. Say so where it belongs, in the layer:

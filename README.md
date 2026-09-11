@@ -51,6 +51,21 @@ when gpu="nvidia" {
 }
 ```
 
+A layer can also say which groups the machine's user belongs to:
+
+```kdl
+groups {
+    libvirt     // manage VMs without a password prompt for every action
+    wireshark   // capture without running the whole GUI as root
+}
+```
+
+Group membership is the fifth thing a machine's configuration consists of, and
+the one most tools leave to a README. It is the invoking user's groups — the
+only actor lami has. lami never *creates* a group: the package that needs one
+creates it with the right gid, so a declared group that does not exist is
+reported as a missing package rather than silently invented.
+
 **AUR packages have no separate block.** They live in the same `packages` list;
 lami reads pacman's sync database to tell where a package comes from, so you do
 not have to keep track of it while writing config.
@@ -226,8 +241,14 @@ sudo lami apply --dry-run    # show the plan and stop
 sudo lami apply              # install, write, enable, run hooks
 ```
 
-In that order: a service cannot be enabled before its package exists, and a
-hook exists to react to a file that has just changed.
+In that order — packages, groups, files, services, hooks. A service cannot be
+enabled before its package exists, a group cannot be joined before the package
+that creates it is installed, and a hook exists to react to a file that has
+just changed.
+
+A membership added by `apply` takes effect at the next login, not in the
+session that ran the command. lami says so rather than letting the next thing
+that fails look like the step not having worked.
 
 One file jumps the queue: **`/etc/pacman.conf`**, if a layer manages it. It is
 pacman's own configuration — which repositories exist, and therefore where

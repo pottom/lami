@@ -294,6 +294,33 @@ pub fn run_apply(
         report
     };
 
+    // --- groups -----------------------------------------------------------
+    //
+    // After packages, because the package that needs a group is what creates
+    // it, and before services, because a unit may expect the membership.
+    let joins: Vec<&str> = report
+        .changes
+        .iter()
+        .filter_map(|c| match c {
+            Change::JoinGroup { group, .. } => Some(group.as_str()),
+            _ => None,
+        })
+        .collect();
+    if !joins.is_empty() {
+        println!("{}", crate::color::bold("groups:"));
+        for g in &joins {
+            crate::groups::add(&actor.name, g)?;
+            println!("  {} joined {g}", actor.name);
+        }
+        // Worth saying plainly. A membership is read at login, so the session
+        // that ran this command still does not have it, and the first thing
+        // that fails afterwards would look like this step not having worked.
+        println!(
+            "{}",
+            crate::color::dim("  takes effect at the next login, not in this session")
+        );
+    }
+
     // --- files ------------------------------------------------------------
     write_files(r, &report, settings, actor, "files:", |_| true)?;
 
@@ -372,6 +399,9 @@ fn record_state(r: &Resolved<'_>, actor: &Actor) -> Result<()> {
     for (_, d) in r.packages() {
         st.packages.insert(d.name.clone());
     }
+    for (_, d) in r.groups() {
+        st.groups.insert(d.name.clone());
+    }
     for (_, d) in r.services() {
         let unit = systemd::qualify(&d.name);
         match d.scope {
@@ -395,6 +425,7 @@ fn _unused(_: &Path) {
 /// What is no longer declared, but a previous apply recorded as managed.
 pub struct Stale {
     pub packages: Vec<String>,
+    pub groups: Vec<String>,
     pub services: Vec<String>,
     pub user_services: Vec<String>,
     pub files: Vec<String>,
@@ -403,12 +434,17 @@ pub struct Stale {
 impl Stale {
     pub fn is_empty(&self) -> bool {
         self.packages.is_empty()
+            && self.groups.is_empty()
             && self.services.is_empty()
             && self.user_services.is_empty()
             && self.files.is_empty()
     }
     pub fn len(&self) -> usize {
-        self.packages.len() + self.services.len() + self.user_services.len() + self.files.len()
+        self.packages.len()
+            + self.groups.len()
+            + self.services.len()
+            + self.user_services.len()
+            + self.files.len()
     }
 }
 
@@ -422,6 +458,8 @@ pub fn stale(r: &Resolved<'_>, actor: &Actor) -> Stale {
 
     let now_pkgs: std::collections::BTreeSet<String> =
         r.packages().iter().map(|(_, d)| d.name.clone()).collect();
+    let now_groups: std::collections::BTreeSet<String> =
+        r.groups().iter().map(|(_, d)| d.name.clone()).collect();
     let mut now_svcs = std::collections::BTreeSet::new();
     let mut now_user_svcs = std::collections::BTreeSet::new();
     for (_, d) in r.services() {
@@ -439,6 +477,7 @@ pub fn stale(r: &Resolved<'_>, actor: &Actor) -> Stale {
 
     Stale {
         packages: prev.packages.difference(&now_pkgs).cloned().collect(),
+        groups: prev.groups.difference(&now_groups).cloned().collect(),
         services: prev.services.difference(&now_svcs).cloned().collect(),
         user_services: prev
             .user_services
@@ -485,6 +524,15 @@ pub fn run_prune(s: &Stale, actor: &Actor) -> Result<()> {
                 }
                 Err(e) => println!("  {f} FAILED: {e}"),
             }
+        }
+    }
+    if !s.groups.is_empty() {
+        println!("{}", crate::color::bold("groups:"));
+        // Only memberships a previous apply added: a group somebody joined by
+        // hand never reached the state file, so it is never a candidate.
+        for g in &s.groups {
+            crate::groups::remove(&actor.name, g)?;
+            println!("  {} removed from {g}", actor.name);
         }
     }
     if !s.packages.is_empty() {

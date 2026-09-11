@@ -25,6 +25,9 @@ pub struct State {
     /// the command. Disabling a user unit in system scope silently does
     /// nothing, which would make prune quietly ineffective.
     pub user_services: BTreeSet<String>,
+    /// Group memberships a previous apply added. A group somebody joined by
+    /// hand is never in here, and so is never a candidate for prune.
+    pub groups: BTreeSet<String>,
     pub host: String,
 }
 
@@ -43,9 +46,10 @@ fn encode(s: &State) -> String {
             .join(",\n")
     };
     format!(
-        "{{\n  \"host\": \"{}\",\n  \"packages\": [\n{}\n  ],\n  \"files\": [\n{}\n  ],\n  \"services\": [\n{}\n  ],\n  \"user_services\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"host\": \"{}\",\n  \"packages\": [\n{}\n  ],\n  \"groups\": [\n{}\n  ],\n  \"files\": [\n{}\n  ],\n  \"services\": [\n{}\n  ],\n  \"user_services\": [\n{}\n  ]\n}}\n",
         s.host,
         arr(&s.packages),
+        arr(&s.groups),
         arr(&s.files),
         arr(&s.services),
         arr(&s.user_services)
@@ -68,13 +72,15 @@ fn decode(text: &str) -> State {
             ("files", 1),
             ("user_services", 3),
             ("services", 2),
+            ("groups", 4),
         ] {
             if t.starts_with(&format!("\"{key}\"")) {
                 section = Some(match which {
                     0 => &mut st.packages,
                     1 => &mut st.files,
                     2 => &mut st.services,
-                    _ => &mut st.user_services,
+                    3 => &mut st.user_services,
+                    _ => &mut st.groups,
                 });
                 break;
             }
@@ -127,10 +133,12 @@ mod tests {
         s.files.insert("/etc/pacman.conf".into());
         s.services.insert("greetd.service".into());
         s.user_services.insert("wireplumber.service".into());
+        s.groups.insert("libvirt".into());
 
         let back = decode(&encode(&s));
         assert_eq!(back.host, "frodo");
         assert_eq!(back.packages, s.packages);
+        assert_eq!(back.groups, s.groups);
         assert_eq!(back.files, s.files);
         assert_eq!(back.services, s.services);
         assert_eq!(back.user_services, s.user_services);

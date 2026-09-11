@@ -251,6 +251,10 @@ pub struct Layer {
     /// What this layer needs to know about the machine. See [`ParamDecl`].
     pub params: Vec<ParamDecl>,
     pub packages: Vec<Decl>,
+    /// Groups the machine's user belongs to. A fifth resource, and the one
+    /// thing a machine's configuration consists of that used to have no home
+    /// here -- see the note on `Resolved::groups`.
+    pub groups: Vec<Decl>,
     pub services: Vec<UnitDecl>,
     pub files: Vec<FileDecl>,
     pub hooks: Vec<Hook>,
@@ -538,6 +542,7 @@ impl Layer {
     pub fn conditions(&self) -> impl Iterator<Item = &Condition> {
         self.packages
             .iter()
+            .chain(self.groups.iter())
             .filter_map(|d| d.condition.as_ref())
             .chain(self.services.iter().filter_map(|d| d.condition.as_ref()))
             .chain(self.files.iter().filter_map(|d| d.condition.as_ref()))
@@ -554,6 +559,7 @@ impl Layer {
             needs: Vec::new(),
             params: Vec::new(),
             packages: Vec::new(),
+            groups: Vec::new(),
             services: Vec::new(),
             files: Vec::new(),
             hooks: Vec::new(),
@@ -589,6 +595,13 @@ fn collect(
             // derives it from pacman's sync database.
             "packages" => layer
                 .packages
+                .extend(names_from(node, src, path, cond.as_ref())),
+            // `groups { libvirt }` means the user this config is for belongs
+            // to that group. Not "create the group": the package that needs
+            // one creates it, and a group with no members and no owner is not
+            // something a config should be inventing.
+            "groups" => layer
+                .groups
                 .extend(names_from(node, src, path, cond.as_ref())),
             "services" => {
                 layer
@@ -1049,6 +1062,16 @@ impl Resolved<'_> {
     /// The packages that actually apply to this host, in layer order.
     pub fn packages(&self) -> Vec<(&Layer, &Decl)> {
         self.select(|l| &l.packages)
+    }
+
+    /// The groups this host's user should belong to.
+    ///
+    /// Whose groups: the invoking user's, which is the only actor lami has.
+    /// Everything else that touches a home directory or drops privileges
+    /// already means that user, and a config that managed somebody else's
+    /// membership would be managing a machine it cannot otherwise see.
+    pub fn groups(&self) -> Vec<(&Layer, &Decl)> {
+        self.select(|l| &l.groups)
     }
     pub fn services(&self) -> Vec<(&Layer, &UnitDecl)> {
         let mut out = Vec::new();

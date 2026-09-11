@@ -15,6 +15,8 @@ pub enum Change {
     InstallPackage { name: String, layer: String },
     /// Declared, present, but only as somebody else's dependency.
     AdoptPackage { name: String, layer: String },
+    /// The user is not in a group the config says they belong to.
+    JoinGroup { group: String, layer: String },
     /// A unit is not in the state the config asks for.
     SetUnitState {
         unit: String,
@@ -55,6 +57,7 @@ impl Change {
     pub fn kind(&self) -> &'static str {
         match self {
             Change::InstallPackage { .. } | Change::AdoptPackage { .. } => "packages",
+            Change::JoinGroup { .. } => "groups",
             Change::SetUnitState { .. }
             | Change::DaemonReload { .. }
             | Change::RestartUnit { .. } => "services",
@@ -72,6 +75,7 @@ impl Change {
         match self {
             Change::InstallPackage { .. } => "install",
             Change::AdoptPackage { .. } => "adopt",
+            Change::JoinGroup { .. } => "join",
             Change::SetUnitState { want, .. } => match want {
                 crate::config::UnitState::Enabled => "enable",
                 crate::config::UnitState::Disabled => "disable",
@@ -90,6 +94,7 @@ impl Change {
     pub fn subject(&self) -> String {
         match self {
             Change::InstallPackage { name, .. } | Change::AdoptPackage { name, .. } => name.clone(),
+            Change::JoinGroup { group, .. } => group.clone(),
             Change::SetUnitState { unit, .. } | Change::RestartUnit { unit, .. } => unit.clone(),
             Change::DaemonReload { scope } => match scope {
                 crate::config::Scope::System => "systemd".into(),
@@ -107,6 +112,9 @@ impl Change {
         match self {
             Change::AdoptPackage { layer, .. } => {
                 format!("declared in {layer}, installed only as a dependency")
+            }
+            Change::JoinGroup { layer, .. } => {
+                format!("declared in {layer}, you are not a member")
             }
             Change::InstallPackage { layer, .. } => {
                 format!("declared in {layer}, not installed")
@@ -139,6 +147,7 @@ impl Change {
         match self {
             Change::InstallPackage { .. }
             | Change::AdoptPackage { .. }
+            | Change::JoinGroup { .. }
             | Change::CreateFile { .. } => added(s),
             Change::SetUnitState { want, .. } => match want {
                 crate::config::UnitState::Enabled => added(s),
@@ -287,6 +296,38 @@ pub fn compute(
         undeclared_packages = explicit.difference(&declared).cloned().collect();
     } else {
         skipped.push("packages (pacman not available)".into());
+    }
+
+    // --- groups -----------------------------------------------------------
+    //
+    // Before files and services on purpose: a group the user has just been
+    // added to is the sort of thing a service wants to exist first, and it is
+    // the cheapest check here.
+    if crate::groups::available() {
+        let mine = crate::groups::of_user(user)?;
+        let all = crate::groups::existing()?;
+        for (layer, d) in r.groups() {
+            if mine.contains(&d.name) {
+                continue;
+            }
+            // gpasswd cannot create a group, and a config should not either:
+            // the package that needs one creates it with the right gid. So an
+            // absent group is somebody's missing package, not a change.
+            if !all.contains(&d.name) {
+                problems.push(format!(
+                    "group '{}' ({}) does not exist on this machine. Nothing can join it \
+                     until the package that creates it is installed.",
+                    d.name, layer.name
+                ));
+                continue;
+            }
+            changes.push(Change::JoinGroup {
+                group: d.name.clone(),
+                layer: layer.name.clone(),
+            });
+        }
+    } else {
+        skipped.push("groups (id not available)".into());
     }
 
     // --- files ------------------------------------------------------------

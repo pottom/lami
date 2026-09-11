@@ -7,6 +7,7 @@ mod color;
 mod config;
 mod diff;
 mod error;
+mod groups;
 mod pacman;
 mod perms;
 mod render;
@@ -540,6 +541,7 @@ fn cmd_show(cfg: &Config, host: String) -> Result<(), Error> {
 
     println!("\n{}", color::bold("resources for this host:"));
     println!("  packages   {}", r.packages().len());
+    println!("  groups     {}", r.groups().len());
     println!("  services   {}", r.services().len());
     Ok(())
 }
@@ -548,7 +550,7 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
     let r = cfg.resolve(&host)?;
 
     let mut found = false;
-    for (kind, items) in [("package", r.packages())] {
+    for (kind, items) in [("package", r.packages()), ("group", r.groups())] {
         for (layer, decl) in items {
             if decl.name != target {
                 continue;
@@ -568,8 +570,8 @@ fn cmd_why(cfg: &Config, host: String, target: &str) -> Result<(), Error> {
             }
             if let Some(c) = &decl.condition {
                 let val = r
-                    .host
-                    .param(&c.key)
+                    .params
+                    .get(&c.key)
                     .map(|v| v.to_string())
                     .unwrap_or_default();
                 println!("  condition:  {} (this host: {} = {})", c, c.key, val);
@@ -1152,6 +1154,9 @@ fn cmd_prune(cfg: &Config, host: String, _dry: bool, force: bool, yes: bool) -> 
 
     for p in &stale.packages {
         println!("  {} {p}", color::removed("- package"));
+    }
+    for g in &stale.groups {
+        println!("  {} {g}", color::removed("- group  "));
     }
     for s in &stale.services {
         println!("  {} {s}", color::removed("- service"));
