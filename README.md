@@ -397,8 +397,15 @@ YubiKey is appending a public key and re-encrypting — no key ever has to be
 copied between machines.
 
 `age` is called as a program rather than linked as a library — the same
-reasoning as pacman, and it means a YubiKey works through
-`age-plugin-yubikey` without lami knowing anything about smartcards.
+reasoning as pacman. It also means a hardware key should work through
+`age-plugin-yubikey` without lami knowing anything about smartcards: lami
+passes the identity file to `age` and the plugin does the rest.
+
+**That path is untested.** Everything here has been exercised end to end with
+a file key — encrypt, declare, diff, render, apply, capture — but nobody has
+put a YubiKey through it, so treat it as a design intention rather than a
+claim. Generating a key writes to a PIV slot, which is not something to do to
+somebody's working security key in order to test a config tool.
 
 `capture` re-encrypts rather than writing the live file through, so pulling a
 change back cannot put the secret into the repository in the clear. It prints

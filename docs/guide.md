@@ -608,6 +608,10 @@ compare, `lami render` prints the plaintext, `lami apply` writes it.
 Getting the first key onto a new machine is the one step nothing can automate —
 a YubiKey, a password manager, or a USB stick.
 
+> **On hardware keys:** lami calls `age`, so `age-plugin-yubikey` ought to work
+> by pointing an `identity` line at the file it writes. Ought to: it has never
+> been tried. All of the above was exercised with a file key.
+
 ---
 
 ## 9. The repo, and a second machine
