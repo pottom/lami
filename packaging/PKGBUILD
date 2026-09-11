@@ -7,11 +7,13 @@ arch=('x86_64')
 url="https://github.com/pottom/lami"
 license=('MIT')
 
-# Deliberately none. lami shells out to pacman, systemctl and age rather than
-# linking any of them, so this package has no shared library dependency and
-# cannot be broken by a pacman ABI bump -- which matters, because it is the
-# tool you would reach for to repair such a break.
-depends=()
+# Only what the binary actually links: the C runtime, which `base` guarantees.
+#
+# Nothing else. lami shells out to pacman, systemctl, git and age rather than
+# linking any of them, so no ABI bump in those can break it -- which matters,
+# because it is the tool you would reach for to repair such a break. paru
+# links libalpm and was unbuildable for five weeks when pacman 7.1 landed.
+depends=('glibc' 'libgcc')
 
 # An AUR helper is only needed if a layer declares AUR packages, and lami says
 # so plainly when one is missing. age is only needed for encrypted sources.
@@ -23,7 +25,7 @@ optdepends=(
 
 makedepends=('cargo' 'git')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('fea6d217d47433ecb668d894a5a78a89e4a7d30894faf15658df9c1a57144664')
 
 prepare() {
     cd "$pkgname-$pkgver"

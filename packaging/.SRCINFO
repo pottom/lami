@@ -1,0 +1,18 @@
+pkgbase = lami
+	pkgdesc = Layered, declarative system configuration for Arch Linux
+	pkgver = 0.3.0
+	pkgrel = 1
+	url = https://github.com/pottom/lami
+	arch = x86_64
+	license = MIT
+	makedepends = cargo
+	makedepends = git
+	depends = glibc
+	depends = libgcc
+	optdepends = paru: install packages from the AUR
+	optdepends = yay: install packages from the AUR
+	optdepends = age: decrypt *.age source files
+	source = lami-0.3.0.tar.gz::https://github.com/pottom/lami/archive/refs/tags/v0.3.0.tar.gz
+	sha256sums = fea6d217d47433ecb668d894a5a78a89e4a7d30894faf15658df9c1a57144664
+
+pkgname = lami
